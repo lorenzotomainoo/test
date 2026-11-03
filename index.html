@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HowToChinese</title>
+  <meta name="description" content="HowToChinese: spreadsheet, seller, haul e coupon per orientarti negli acquisti dalla Cina.">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Icone (sprite SVG, una per sezione) -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <!-- Spreadsheet: tabella con riga evidenziata e cursore -->
+      <symbol id="i-sheet" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="4" y="5" width="24" height="22" rx="2.5"/>
+        <path d="M4 12h24M4 19.5h24M13 12v15M21 12v15"/>
+        <rect x="13.8" y="13" width="6.4" height="5.5" rx="1" fill="currentColor" stroke="none" opacity=".9"/>
+      </symbol>
+      <!-- Sellers: vetrina con tenda -->
+      <symbol id="i-seller" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M5 12.5 7.5 5h17L27 12.5"/>
+        <path d="M5 12.5c0 2 1.6 3.2 3.6 3.2s3.7-1.2 3.7-3.2c0 2 1.6 3.2 3.7 3.2s3.7-1.2 3.7-3.2c0 2 1.6 3.2 3.6 3.2S27 14.500 27 12.500"/>
+        <path d="M7 15.700V27h18V15.700"/>
+        <path d="M13 27v-6.500a1.500 1.500 0 0 1 1.500-1.500h3a1.500 1.500 0 0 1 1.500 1.500V27"/>
+      </symbol>
+      <!-- Haul: pacco con nastro -->
+      <symbol id="i-haul" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M16 3.500 27 9v14l-11 5.500L5 23V9L16 3.500Z"/>
+        <path d="M5 9l11 5.500L27 9M16 14.500v14"/>
+        <path d="m10.500 6.300 11 5.500v4.500" opacity=".9"/>
+      </symbol>
+      <!-- Coupon: biglietto con tacche e percentuale -->
+      <symbol id="i-coupon" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4 9.500A1.500 1.500 0 0 1 5.500 8h21A1.500 1.500 0 0 1 28 9.500V13a3 3 0 0 0 0 6v3.500a1.500 1.500 0 0 1-1.500 1.500h-21A1.500 1.500 0 0 1 4 22.500V19a3 3 0 0 0 0-6V9.500Z"/>
+        <path d="m13 19 6-6"/>
+        <circle cx="13.300" cy="13.300" r="1.100" fill="currentColor" stroke="none"/>
+        <circle cx="18.700" cy="18.700" r="1.100" fill="currentColor" stroke="none"/>
+      </symbol>
+      <symbol id="i-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M5 12h14M13 6l6 6-6 6"/>
+      </symbol>
+    </defs>
+  </svg>
+
+  <!-- Header -->
+  <header class="site-header">
+    <a class="brand" href="#top" aria-label="HowToChinese, torna in alto">
+      <span class="brand-mark" aria-hidden="true">H</span>
+      <span class="brand-name">HowToChinese</span>
+    </a>
+
+    <nav class="site-nav" aria-label="Sezioni">
+      <a href="#spreadsheet" data-i18n="nav_sheet">Spreadsheet</a>
+      <a href="#sellers" data-i18n="nav_sellers">Sellers</a>
+      <a href="#haul" data-i18n="nav_haul">Haul</a>
+      <a href="#coupon" data-i18n="nav_coupon">Coupon</a>
+    </nav>
+
+    <label class="lang">
+      <span class="sr-only" data-i18n="lang_label">Lingua</span>
+      <select id="lang-select">
+        <option value="it">Italiano</option>
+        <option value="en">English</option>
+      </select>
+    </label>
+  </header>
+
+  <main id="top">
+
+    <!-- INTRO -->
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-inner">
+        <p class="hero-kicker" data-i18n="hero_kicker">La guida agli acquisti dalla Cina</p>
+        <h1 id="hero-title" class="wordmark">
+          <span class="wordmark-line"><span>HowTo</span></span>
+          <span class="wordmark-line"><span>Chinese</span></span>
+        </h1>
+        <p class="hero-sub" data-i18n="hero_sub">Spreadsheet, seller, haul e coupon in un unico posto, per scegliere con metodo.</p>
+
+        <ul class="hero-index">
+          <li>
+            <a href="#spreadsheet">
+              <svg class="ico" aria-hidden="true"><use href="#i-sheet"/></svg>
+              <span class="hi-text">
+                <strong data-i18n="nav_sheet">Spreadsheet</strong>
+                <small data-i18n="idx_sheet">I prodotti selezionati</small>
+              </span>
+            </a>
+          </li>
+          <li>
+            <a href="#sellers">
+              <svg class="ico" aria-hidden="true"><use href="#i-seller"/></svg>
+              <span class="hi-text">
+                <strong data-i18n="nav_sellers">Sellers</strong>
+                <small data-i18n="idx_sellers">I venditori migliori</small>
+              </span>
+            </a>
+          </li>
+          <li>
+            <a href="#haul">
+              <svg class="ico" aria-hidden="true"><use href="#i-haul"/></svg>
+              <span class="hi-text">
+                <strong data-i18n="nav_haul">Haul</strong>
+                <small data-i18n="idx_haul">Gli ordini della community</small>
+              </span>
+            </a>
+          </li>
+          <li>
+            <a href="#coupon">
+              <svg class="ico" aria-hidden="true"><use href="#i-coupon"/></svg>
+              <span class="hi-text">
+                <strong data-i18n="nav_coupon">Coupon</strong>
+                <small data-i18n="idx_coupon">Sconti e codici</small>
+              </span>
+            </a>
+          </li>
+        </ul>
+      </div>
+
+      <a class="scroll-cue" href="#spreadsheet">
+        <span data-i18n="scroll">Scorri</span>
+        <span class="scroll-line" aria-hidden="true"></span>
+      </a>
+    </section>
+
+    <!-- SPREADSHEET -->
+    <section class="section sheet" id="spreadsheet" aria-labelledby="sheet-title">
+      <div class="section-head">
+        <svg class="ico ico-lg" aria-hidden="true"><use href="#i-sheet"/></svg>
+        <div class="section-head-text">
+          <h2 id="sheet-title" class="section-title">Spreadsheet</h2>
+          <p class="section-lead" data-i18n="sheet_lead">Una tabella ordinata con link, prezzi e foto reali dei prodotti più richiesti della settimana.</p>
+        </div>
+        <a class="btn btn-solid" href="spreadsheet.html">
+          <span data-i18n="sheet_cta">Apri la spreadsheet</span>
+          <svg class="ico-sm" aria-hidden="true"><use href="#i-arrow"/></svg>
+        </a>
+      </div>
+
+      <div class="carousel" data-carousel>
+        <div class="carousel-track" tabindex="0" aria-label="Anteprime dalla spreadsheet">
+
+          <!-- Sostituisci i file in /images con le tue 4 foto (stessi nomi, oppure cambia src) -->
+          <article class="slide">
+            <div class="slide-media">
+              <div class="ph"><span>images/spreadsheet-1.jpg</span></div>
+              <img src="images/spreadsheet-1.jpg" alt="Anteprima prodotto 1" loading="lazy">
+            </div>
+            <div class="slide-body">
+              <h3>Nome prodotto 1</h3>
+              <p>Categoria · Fornitore</p>
+            </div>
+          </article>
+
+          <article class="slide">
+            <div class="slide-media">
+              <div class="ph"><span>images/spreadsheet-2.jpg</span></div>
+              <img src="images/spreadsheet-2.jpg" alt="Anteprima prodotto 2" loading="lazy">
+            </div>
+            <div class="slide-body">
+              <h3>Nome prodotto 2</h3>
+              <p>Categoria · Fornitore</p>
+            </div>
+          </article>
+
+          <article class="slide">
+            <div class="slide-media">
+              <div class="ph"><span>images/spreadsheet-3.jpg</span></div>
+              <img src="images/spreadsheet-3.jpg" alt="Anteprima prodotto 3" loading="lazy">
+            </div>
+            <div class="slide-body">
+              <h3>Nome prodotto 3</h3>
+              <p>Categoria · Fornitore</p>
+            </div>
+          </article>
+
+          <article class="slide">
+            <div class="slide-media">
+              <div class="ph"><span>images/spreadsheet-4.jpg</span></div>
+              <img src="images/spreadsheet-4.jpg" alt="Anteprima prodotto 4" loading="lazy">
+            </div>
+            <div class="slide-body">
+              <h3>Nome prodotto 4</h3>
+              <p>Categoria · Fornitore</p>
+            </div>
+          </article>
+
+        </div>
+
+        <div class="carousel-controls">
+          <button class="round-btn" type="button" data-dir="-1" aria-label="Precedente">
+            <svg class="ico-sm flip" aria-hidden="true"><use href="#i-arrow"/></svg>
+          </button>
+          <button class="round-btn" type="button" data-dir="1" aria-label="Successivo">
+            <svg class="ico-sm" aria-hidden="true"><use href="#i-arrow"/></svg>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- SELLERS -->
+    <section class="section sellers" id="sellers" aria-labelledby="sellers-title">
+      <div class="split">
+        <div class="split-text">
+          <svg class="ico ico-lg" aria-hidden="true"><use href="#i-seller"/></svg>
+          <h2 id="sellers-title" class="section-title">Sellers</h2>
+          <p class="section-lead" data-i18n="sellers_lead">I venditori più affidabili, scelti per qualità, comunicazione e tempi di spedizione.</p>
+          <a class="btn btn-outline" href="sellers.html">
+            <span data-i18n="sellers_cta">Entra nella sezione</span>
+            <svg class="ico-sm" aria-hidden="true"><use href="#i-arrow"/></svg>
+          </a>
+        </div>
+
+        <ol class="podium" aria-label="Anteprima classifica seller">
+          <li class="podium-2">
+            <div class="podium-badge"><svg class="ico" aria-hidden="true"><use href="#i-seller"/></svg></div>
+            <span class="podium-rank">2</span>
+          </li>
+          <li class="podium-1">
+            <div class="podium-badge"><svg class="ico" aria-hidden="true"><use href="#i-seller"/></svg></div>
+            <span class="podium-rank">1</span>
+          </li>
+          <li class="podium-3">
+            <div class="podium-badge"><svg class="ico" aria-hidden="true"><use href="#i-seller"/></svg></div>
+            <span class="podium-rank">3</span>
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- HAUL -->
+    <section class="section haul" id="haul" aria-labelledby="haul-title">
+      <div class="haul-inner">
+        <svg class="ico ico-lg" aria-hidden="true"><use href="#i-haul"/></svg>
+        <h2 id="haul-title" class="section-title section-title-xl">Haul</h2>
+        <p class="section-lead" data-i18n="haul_lead">Ordini reali condivisi dalla community: cosa è arrivato, quanto è costato, come è andata.</p>
+        <a class="btn btn-light" href="haul.html">
+          <span data-i18n="haul_cta">Scopri gli haul</span>
+          <svg class="ico-sm" aria-hidden="true"><use href="#i-arrow"/></svg>
+        </a>
+      </div>
+    </section>
+
+    <!-- COUPON -->
+    <section class="section coupon" id="coupon" aria-labelledby="coupon-title">
+      <div class="ticket">
+        <div class="ticket-main">
+          <svg class="ico ico-lg" aria-hidden="true"><use href="#i-coupon"/></svg>
+          <h2 id="coupon-title" class="section-title">Coupon</h2>
+          <p class="section-lead" data-i18n="coupon_lead">Stiamo completando la sezione. A breve troverai codici sconto e promozioni aggiornate.</p>
+        </div>
+        <div class="ticket-stub">
+          <span class="soon" data-i18n="soon">In arrivo</span>
+          <a class="btn btn-solid" href="coupon.html">
+            <span data-i18n="coupon_cta">Apri i coupon</span>
+            <svg class="ico-sm" aria-hidden="true"><use href="#i-arrow"/></svg>
+          </a>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="site-footer">
+    <p class="foot-brand">HowToChinese</p>
+    <p class="foot-note" data-i18n="footer">Sito indipendente, non affiliato a marketplace o venditori citati.</p>
+  </footer>
+
+  <script src="script.js"></script>
+</body>
+</html>
