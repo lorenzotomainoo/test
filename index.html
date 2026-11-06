@@ -1,0 +1,1685 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Il Botteghino — Tycoon delle Scommesse Sportive</title>
+<!--
+  ============================================================================
+  IL BOTTEGHINO — Tycoon delle Scommesse Sportive (single-player, offline)
+  ----------------------------------------------------------------------------
+  Architettura (stile React/Flux, senza dipendenze esterne):
+    • SEZIONE 1 (store protetto): lo stato di gioco vive in una closure
+      (createGameStore) e NON è raggiungibile da window. L'unica API esposta
+      è un oggetto congelato { dispatch, subscribe, getState } — l'equivalente
+      di un Context + useReducer, con lo stato reso immutabile in lettura.
+    • SEZIONE 2 (pure logic): generatore sport/atleti, matematica delle quote
+      da ELO, simulazione risultati, codec di salvataggio (Base64 + hash salt).
+    • SEZIONE 3/4 (componenti UI): funzioni di render puro (giornata, albero
+      abilità, classifiche) + delegazione eventi → dispatch(action).
+  Anti-cheat: tasto destro disattivato, F12 / Ctrl+Shift+I / Ctrl+Shift+J
+  intercettati, salvataggio firmato (Base64 + FNV-1a con salt segreta).
+  ============================================================================
+-->
+<style>
+:root{
+  --bg:#f4f6fa; --card:#ffffff; --ink:#0f172a; --muted:#64748b;
+  --line:#e2e8f0; --accent:#059669; --accent-dark:#047857; --accent-soft:#ecfdf5;
+  --gold:#d97706; --gold-soft:#fffbeb; --danger:#dc2626; --danger-soft:#fef2f2;
+  --shadow:0 1px 2px rgba(15,23,42,.06), 0 8px 24px -12px rgba(15,23,42,.12);
+  --radius:14px;
+  font-size:15px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  background:
+    radial-gradient(1000px 500px at 85% -10%, #d1fae5 0%, transparent 60%),
+    radial-gradient(800px 400px at -10% 110%, #e0f2fe 0%, transparent 55%),
+    var(--bg);
+  color:var(--ink); -webkit-font-smoothing:antialiased;
+}
+button{font:inherit;cursor:pointer;border:none;background:none;color:inherit}
+input{font:inherit}
+::selection{background:#a7f3d3}
+
+/* ---------- Barra superiore ---------- */
+.topbar{
+  position:sticky;top:0;z-index:50;display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+  padding:12px 20px;background:rgba(255,255,255,.82);backdrop-filter:blur(10px);
+  border-bottom:1px solid var(--line);
+}
+.brand{display:flex;align-items:center;gap:10px;font-weight:800;letter-spacing:-.02em}
+.brand__logo{width:38px;height:38px;border-radius:12px;display:grid;place-items:center;
+  background:linear-gradient(135deg,var(--accent),#34d399);color:#fff;font-size:20px;
+  box-shadow:0 4px 12px -2px rgba(5,150,105,.45)}
+.brand__name{font-size:1.05rem}
+.brand__sub{display:block;font-size:.68rem;font-weight:600;color:var(--muted);letter-spacing:.08em;text-transform:uppercase}
+.hud{display:flex;align-items:center;gap:10px;margin-left:auto;flex-wrap:wrap}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:7px 13px;border-radius:999px;
+  background:var(--card);border:1px solid var(--line);font-weight:700;font-size:.9rem;box-shadow:var(--shadow)}
+.chip--day{background:var(--gold-soft);border-color:#fde68a;color:#92400e}
+.pill--credits{display:inline-flex;align-items:center;gap:8px;padding:7px 16px;border-radius:999px;
+  background:linear-gradient(135deg,#065f46,#059669);color:#fff;font-weight:800;font-size:1.05rem;
+  box-shadow:0 4px 14px -4px rgba(5,150,105,.55);min-width:130px;justify-content:center}
+.pill--credits.bump-up{animation:bumpUp .55s ease}
+.pill--credits.bump-down{animation:bumpDown .55s ease}
+@keyframes bumpUp{35%{transform:translateY(-4px) scale(1.07);background:linear-gradient(135deg,#047857,#10b981)}}
+@keyframes bumpDown{20%{transform:translateX(-3px)}40%{transform:translateX(3px)}60%{transform:translateX(-2px)}80%{transform:translateX(2px);background:linear-gradient(135deg,#b91c1c,#ef4444)}}
+.actions{display:flex;gap:8px}
+
+/* ---------- Bottoni ---------- */
+.btn{display:inline-flex;align-items:center;gap:7px;padding:9px 16px;border-radius:11px;
+  font-weight:700;font-size:.9rem;background:var(--card);border:1px solid var(--line);
+  box-shadow:var(--shadow);transition:transform .15s ease, box-shadow .15s ease, background .15s ease}
+.btn:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 6px 18px -6px rgba(15,23,42,.18)}
+.btn:active:not(:disabled){transform:translateY(0)}
+.btn--primary{background:linear-gradient(135deg,var(--accent-dark),var(--accent));color:#fff;border-color:transparent;
+  box-shadow:0 6px 16px -6px rgba(5,150,105,.55)}
+.btn--primary:hover:not(:disabled){background:linear-gradient(135deg,#065f46,#047857)}
+.btn--gold{background:linear-gradient(135deg,#b45309,var(--gold));color:#fff;border-color:transparent}
+.btn--danger{background:var(--danger-soft);color:var(--danger);border-color:#fecaca}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn--sm{padding:6px 11px;font-size:.8rem;border-radius:9px}
+
+/* ---------- Tab di navigazione ---------- */
+.tabs{display:flex;gap:6px;max-width:1120px;margin:18px auto 0;padding:0 16px}
+.tab{flex:1;display:flex;align-items:center;justify-content:center;gap:8px;padding:11px 10px;
+  border-radius:12px;font-weight:700;font-size:.92rem;color:var(--muted);background:rgba(255,255,255,.6);
+  border:1px solid transparent;transition:all .18s ease}
+.tab:hover{color:var(--ink);background:#fff}
+.tab--active{color:var(--accent-dark);background:#fff;border-color:#a7f3d0;box-shadow:var(--shadow)}
+.tab__dot{width:7px;height:7px;border-radius:50%;background:var(--accent);animation:pulseDot 1.8s ease infinite}
+@keyframes pulseDot{50%{opacity:.35;transform:scale(1.35)}}
+
+/* ---------- Area contenuti ---------- */
+.view{max-width:1120px;margin:14px auto 60px;padding:0 16px}
+.view.anim{animation:viewIn .35s ease}
+@keyframes viewIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+
+.grid-day{display:grid;grid-template-columns:1fr 350px;gap:16px;align-items:start}
+.section-title{display:flex;align-items:center;gap:8px;font-size:1rem;font-weight:800;margin:4px 0 10px}
+.section-title small{font-weight:600;color:var(--muted);font-size:.75rem}
+
+/* ---------- Carte partita ---------- */
+.matches{display:flex;flex-direction:column;gap:12px}
+.match{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+  padding:14px 16px;box-shadow:var(--shadow);transition:transform .15s ease}
+.match:hover{transform:translateY(-1px)}
+.match__head{display:flex;align-items:center;gap:8px;font-size:.78rem;font-weight:700;color:var(--muted);
+  text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px}
+.match__head .spacer{margin-left:auto}
+.match__num{background:var(--bg);border-radius:6px;padding:2px 7px;font-size:.72rem}
+.match__teams{display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:center}
+.team{display:flex;flex-direction:column;gap:3px;min-width:0}
+.team--away{align-items:flex-end;text-align:right}
+.team__name{font-weight:800;font-size:.98rem;line-height:1.2;overflow-wrap:anywhere}
+.team__meta{display:flex;align-items:center;gap:6px;font-size:.72rem;color:var(--muted);flex-wrap:wrap}
+.team--away .team__meta{justify-content:flex-end}
+.stars{letter-spacing:1px;color:var(--gold)}
+.last5{display:inline-flex;gap:3px}
+.last5 b{font-size:.66rem;width:16px;height:16px;display:inline-grid;place-items:center;border-radius:5px;background:var(--bg);color:var(--muted)}
+.last5 b.wV{background:#d1fae5;color:#065f46}
+.last5 b.wS{background:#fee2e2;color:#991b1b}
+.last5 b.wP{background:#fef3c7;color:#92400e}
+.team__elo-num{font-weight:800;color:var(--accent-dark);background:var(--accent-soft);border-radius:6px;padding:1px 6px}
+.team__form{font-weight:800;color:var(--accent-dark)}
+.vs{font-size:.72rem;font-weight:800;color:var(--muted);background:var(--bg);border-radius:8px;padding:5px 8px}
+.match__odds{display:flex;gap:8px;margin-top:12px}
+.odd{flex:1;display:flex;flex-direction:column;align-items:center;gap:1px;padding:8px 6px;
+  border-radius:10px;border:1px solid var(--line);background:#fafbfe;transition:all .15s ease}
+.odd__label{font-size:.68rem;font-weight:800;color:var(--muted);text-transform:uppercase}
+.odd__value{font-weight:800;font-size:1.02rem}
+.odd:hover:not(:disabled){border-color:#a7f3d0;background:var(--accent-soft);transform:translateY(-1px)}
+.odd--active{background:linear-gradient(135deg,var(--accent-dark),var(--accent));border-color:transparent;color:#fff;
+  box-shadow:0 5px 14px -6px rgba(5,150,105,.6)}
+.odd--active .odd__label{color:#d1fae5}
+.odd:disabled{opacity:.5;cursor:not-allowed}
+.match__signal{display:flex;align-items:center;gap:7px;margin-top:10px;padding:7px 11px;border-radius:9px;
+  background:var(--gold-soft);border:1px dashed #fcd34d;font-size:.8rem;font-weight:700;color:#92400e}
+/* rivelazione risultato */
+.match__result{margin-top:12px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.match__result.hidden{display:none}
+.score{font-weight:900;font-size:1.5rem;letter-spacing:.02em;padding:4px 14px;border-radius:10px;
+  background:var(--bg);border:1px solid var(--line)}
+.match.revealed .score{animation:flash .5s ease}
+@keyframes flash{0%{transform:scale(1.25);background:var(--accent-soft)}100%{transform:scale(1)}}
+.winner-tag{display:inline-flex;align-items:center;gap:5px;padding:4px 11px;border-radius:999px;
+  font-size:.78rem;font-weight:800;animation:pulseWin .6s ease}
+.winner-tag--win{background:var(--accent-soft);color:var(--accent-dark)}
+.winner-tag--lose{background:var(--danger-soft);color:var(--danger)}
+@keyframes pulseWin{0%{transform:scale(.6);opacity:0}70%{transform:scale(1.12)}100%{transform:scale(1);opacity:1}}
+.match__verdict{margin-left:auto;font-size:.75rem;font-weight:800;color:var(--muted)}
+.match--sim .match__odds{opacity:.35;pointer-events:none}
+
+/* ---------- Schedina (slip) ---------- */
+.slip{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+  box-shadow:var(--shadow);padding:16px;position:sticky;top:76px}
+.slip__head{display:flex;align-items:center;gap:8px;font-weight:800;margin-bottom:10px}
+.slip__count{margin-left:auto;background:var(--accent-soft);color:var(--accent-dark);
+  border-radius:999px;padding:2px 10px;font-size:.75rem;font-weight:800}
+.mode-toggle{display:flex;background:var(--bg);border-radius:10px;padding:3px;margin-bottom:12px}
+.mode-toggle button{flex:1;padding:7px;border-radius:8px;font-weight:700;font-size:.82rem;color:var(--muted)}
+.mode-toggle button.on{background:#fff;color:var(--accent-dark);box-shadow:var(--shadow)}
+.slip__empty{padding:18px 8px;text-align:center;color:var(--muted);font-size:.85rem;line-height:1.5}
+.slip__row{display:flex;align-items:center;gap:8px;padding:9px 0;border-bottom:1px dashed var(--line)}
+.slip__row:last-of-type{border-bottom:none}
+.slip__pick{min-width:0;flex:1}
+.slip__pick b{display:block;font-size:.85rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.slip__pick span{font-size:.72rem;color:var(--muted)}
+.slip__row .odd__value{font-size:.9rem}
+.x-btn{width:24px;height:24px;border-radius:8px;color:var(--muted);flex:none}
+.x-btn:hover{background:var(--danger-soft);color:var(--danger)}
+.stake-row{display:flex;align-items:center;gap:8px;margin-top:8px}
+.stake-row label{font-size:.75rem;font-weight:700;color:var(--muted)}
+.stake{width:90px;padding:7px 10px;border:1px solid var(--line);border-radius:9px;font-weight:700;text-align:right}
+.stake:focus{outline:2px solid #a7f3d0;border-color:transparent}
+.slip__totals{margin-top:12px;padding-top:12px;border-top:1px solid var(--line);
+  display:flex;flex-direction:column;gap:6px;font-size:.85rem}
+.slip__totals .row{display:flex;justify-content:space-between}
+.slip__totals .row b{font-variant-numeric:tabular-nums}
+.slip__totals .row--big{font-size:1rem;font-weight:800;color:var(--accent-dark)}
+.slip__cta{margin-top:12px;width:100%;justify-content:center}
+.slip__note{margin-top:9px;font-size:.72rem;color:var(--muted);text-align:center;line-height:1.45}
+.legs-mini{font-size:.72rem;color:var(--muted);margin-top:3px;line-height:1.4}
+
+/* ---------- Scommesse piazzate ---------- */
+.pending{margin-top:16px;background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+  box-shadow:var(--shadow);padding:16px}
+.bet-row{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px dashed var(--line);flex-wrap:wrap}
+.bet-row:last-child{border-bottom:none}
+.bet-row__main{flex:1;min-width:180px}
+.bet-row__main b{font-size:.88rem}
+.bet-row__meta{display:flex;gap:10px;font-size:.72rem;color:var(--muted);margin-top:2px;font-variant-numeric:tabular-nums}
+.bet-row__status{font-size:.72rem;font-weight:800;padding:3px 9px;border-radius:999px;background:var(--bg);color:var(--muted)}
+.bet-row__status--won{background:var(--accent-soft);color:var(--accent-dark)}
+.bet-row__status--lost{background:var(--danger-soft);color:var(--danger)}
+.bet-row__status--cashed{background:var(--gold-soft);color:#92400e}
+.bet-row__payout{font-weight:800;font-variant-numeric:tabular-nums}
+
+/* ---------- Banner riepilogo giornata ---------- */
+.summary{background:linear-gradient(135deg,#064e3b,#065f46);color:#fff;border-radius:var(--radius);
+  padding:20px 22px;box-shadow:0 14px 34px -14px rgba(6,78,59,.6);margin-bottom:16px;
+  display:flex;align-items:center;gap:18px;flex-wrap:wrap;animation:viewIn .4s ease}
+.summary h3{font-size:1.1rem;letter-spacing:-.01em}
+.summary .net{font-size:2rem;font-weight:900;font-variant-numeric:tabular-nums;animation:pulseWin .7s ease}
+.net--pos{color:#6ee7b7}.net--neg{color:#fca5a5}
+.summary__detail{font-size:.82rem;opacity:.85;line-height:1.6}
+.summary .btn{margin-left:auto}
+
+/* ---------- Albero abilità ---------- */
+.tree-layout{display:grid;grid-template-columns:1fr 300px;gap:16px;align-items:start}
+.tree-wrap{overflow:auto;background:
+    radial-gradient(600px 400px at 50% 42%, #0b1220 0%, #060a14 70%);
+  border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);
+  height:600px;cursor:grab;position:relative}
+.tree-wrap.dragging{cursor:grabbing}
+.tree-wrap::after{content:"Trascina per esplorare l'albero 🌲";position:sticky;display:block;width:max-content;
+  margin:0 auto 10px;color:#94a3b8;font-size:.75rem;font-weight:600;bottom:0}
+.tree{position:relative;width:1000px;height:960px;
+  background-image:radial-gradient(circle at center, rgba(52,211,153,.08) 0%, transparent 55%)}
+.tree svg{position:absolute;inset:0;pointer-events:none}
+.edge{stroke:#1e293b;stroke-width:2.5;stroke-dasharray:7 7;opacity:.9}
+.edge--lit{stroke:#34d399;stroke-width:3;stroke-dasharray:none;opacity:.95;
+  filter:drop-shadow(0 0 6px rgba(52,211,153,.7))}
+.node{position:absolute;width:138px;padding:11px 8px 9px;border-radius:14px;text-align:center;
+  transform:translate(-50%,-50%);background:#0f1a2e;border:1.5px solid #1e2b45;color:#cbd5e1;
+  transition:transform .18s ease, box-shadow .18s ease;user-select:none;z-index:2}
+.node:hover{transform:translate(-50%,-50%) scale(1.06);z-index:5}
+.node--available{border-color:#334155;background:#111d33;cursor:pointer}
+.node--available:hover{box-shadow:0 0 0 1px #34d399, 0 10px 26px -10px rgba(0,0,0,.8)}
+.node--owned{border-color:#34d399;background:linear-gradient(160deg,#0d2b22,#0f1a2e);
+  box-shadow:0 0 22px -4px rgba(52,211,153,.45);animation:glowPulse 2.6s ease infinite}
+.node--selected{outline:2px solid #fbbf24;outline-offset:3px}
+@keyframes glowPulse{50%{box-shadow:0 0 34px -2px rgba(52,211,153,.75)}}
+.node--pop{animation:popIn .55s cubic-bezier(.2,.9,.3,1.35) backwards}
+@keyframes popIn{
+  from{opacity:0;transform:translate(-50%,-50%) scale(.45);filter:blur(6px)}
+  to{opacity:1;transform:translate(-50%,-50%) scale(1);filter:blur(0)}
+}
+.node__icon{font-size:1.5rem;line-height:1}
+.node__name{font-weight:800;font-size:.78rem;margin-top:4px;line-height:1.25;color:#f1f5f9}
+.node--available .node__name{color:#e2e8f0}
+.node__cost{display:inline-block;margin-top:5px;font-size:.68rem;font-weight:800;color:#fbbf24;
+  background:rgba(251,191,36,.12);border:1px solid rgba(251,191,36,.3);border-radius:999px;padding:2px 8px}
+.node--owned .node__cost{color:#6ee7b7;background:rgba(52,211,153,.12);border-color:rgba(52,211,153,.3)}
+.node__owned-tag{font-size:.62rem;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:#34d399;margin-top:5px}
+.skill-info{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+  box-shadow:var(--shadow);padding:18px;position:sticky;top:76px}
+.skill-info h3{display:flex;align-items:center;gap:8px;font-size:1.05rem;letter-spacing:-.01em}
+.skill-info .skill-icon{font-size:1.6rem}
+.skill-info p{font-size:.86rem;line-height:1.6;color:#334155;margin:10px 0}
+.skill-info .meta{font-size:.78rem;color:var(--muted);margin-bottom:10px;line-height:1.5}
+.skill-info .btn{width:100%;justify-content:center}
+.skill-info .locked-note{font-size:.8rem;color:var(--muted);text-align:center;padding:6px;font-weight:700}
+.skill-hint{margin-top:10px;font-size:.72rem;color:var(--muted);text-align:center}
+
+/* ---------- Classifiche / statistiche ---------- */
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:12px;margin-bottom:18px}
+.stat-card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+  box-shadow:var(--shadow);padding:14px 16px;animation:viewIn .4s ease backwards}
+.stat-card .k{font-size:.72rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.stat-card .v{font-size:1.45rem;font-weight:900;margin-top:3px;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.stat-card .v--good{color:var(--accent-dark)}.stat-card .v--bad{color:var(--danger)}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+  box-shadow:var(--shadow);padding:16px;margin-bottom:16px}
+.filter-chips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+.fchip{padding:5px 12px;border-radius:999px;font-size:.78rem;font-weight:700;background:var(--bg);
+  border:1px solid var(--line);color:var(--muted)}
+.fchip.on{background:var(--accent-soft);border-color:#a7f3d0;color:var(--accent-dark)}
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:.85rem}
+th{text-align:left;font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);
+  padding:8px 10px;border-bottom:1px solid var(--line)}
+td{padding:9px 10px;border-bottom:1px dashed var(--line);font-variant-numeric:tabular-nums;vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tbody tr:hover{background:#f8fafc}
+.rank{font-weight:800;color:var(--muted);width:34px}
+.rank--1{color:var(--gold)}.rank--2{color:#94a3b8}.rank--3{color:#b45309}
+td .team__name{font-size:.86rem}
+.net-pos{color:var(--accent-dark);font-weight:800}.net-neg{color:var(--danger);font-weight:800}
+.mini-bars{display:flex;gap:2px}
+.mini-bars i{width:7px;height:12px;border-radius:2px;background:var(--line)}
+.mini-bars i.h{background:linear-gradient(180deg,#34d399,#059669)}
+
+/* ---------- Toast & monete fluttuanti ---------- */
+.toasts{position:fixed;right:18px;bottom:18px;z-index:100;display:flex;flex-direction:column;gap:9px;max-width:330px}
+.toast{display:flex;align-items:center;gap:9px;padding:11px 15px;border-radius:12px;background:#0f172a;
+  color:#f8fafc;font-size:.85rem;font-weight:600;box-shadow:0 10px 30px -8px rgba(0,0,0,.5);
+  animation:toastIn .35s cubic-bezier(.2,.9,.3,1.2)}
+.toast--ok{background:linear-gradient(135deg,#065f46,#059669)}
+.toast--err{background:linear-gradient(135deg,#7f1d1d,#dc2626)}
+.toast--gold{background:linear-gradient(135deg,#92400e,#d97706)}
+.toast.out{animation:toastOut .3s ease forwards}
+@keyframes toastIn{from{opacity:0;transform:translateX(40px) scale(.9)}to{opacity:1;transform:none}}
+@keyframes toastOut{to{opacity:0;transform:translateX(40px)}}
+#float-layer{position:fixed;inset:0;pointer-events:none;z-index:99;overflow:hidden}
+.float-coin{position:absolute;font-weight:900;font-size:1.05rem;padding:5px 12px;border-radius:999px;
+  color:#fff;background:rgba(5,150,105,.92);box-shadow:0 6px 18px -6px rgba(5,150,105,.8)}
+.float-coin--up{animation:coinRise 1.15s ease forwards}
+.float-coin--down{animation:coinFall 1.15s ease forwards;background:rgba(220,38,38,.92);
+  box-shadow:0 6px 18px -6px rgba(220,38,38,.8)}
+@keyframes coinRise{0%{opacity:0;transform:translateY(14px) scale(.7)}18%{opacity:1;transform:translateY(0) scale(1.15)}
+  100%{opacity:0;transform:translateY(-58px) scale(1)}}
+@keyframes coinFall{0%{opacity:0;transform:translateY(-14px) scale(.7)}18%{opacity:1;transform:translateY(0) scale(1.15)}
+  100%{opacity:0;transform:translateY(58px) scale(1)}}
+
+/* ---------- Overlay / modali ---------- */
+.overlay{position:fixed;inset:0;z-index:200;background:rgba(8,12,24,.62);backdrop-filter:blur(4px);
+  display:grid;place-items:center;padding:20px;animation:fadeIn .25s ease}
+.overlay.hidden{display:none}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+.modal{max-width:480px;width:100%;background:var(--card);border-radius:20px;padding:28px;
+  box-shadow:0 30px 70px -20px rgba(0,0,0,.5);animation:modalIn .4s cubic-bezier(.2,.9,.3,1.25)}
+@keyframes modalIn{from{opacity:0;transform:translateY(26px) scale(.92)}to{opacity:1;transform:none}}
+.modal__icon{font-size:2.6rem;text-align:center}
+.modal h2{text-align:center;font-size:1.4rem;margin:10px 0 6px;letter-spacing:-.02em}
+.modal p{font-size:.9rem;line-height:1.65;color:#334155;margin:8px 0}
+.modal ul{margin:10px 0 10px 20px;font-size:.85rem;line-height:1.8;color:#334155}
+.modal .btn{width:100%;justify-content:center;margin-top:10px}
+.modal--dark{background:linear-gradient(160deg,#111d33,#060a14);color:#e2e8f0;border:1px solid #1e2b45}
+.modal--dark p{color:#94a3b8}
+
+.empty-state{text-align:center;padding:40px 16px;color:var(--muted);font-size:.9rem;line-height:1.6}
+
+@media (max-width: 940px){
+  .grid-day{grid-template-columns:1fr}
+  .slip{position:static}
+  .tree-layout{grid-template-columns:1fr}
+  .skill-info{position:static}
+  .topbar{padding:10px 12px}
+  .view{padding:0 10px}
+  .tabs{padding:0 10px}
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="brand__logo">🎟️</div>
+    <div>
+      <span class="brand__name">Il Botteghino</span>
+      <span class="brand__sub">Tycoon delle scommesse</span>
+    </div>
+  </div>
+  <div class="hud">
+    <span class="chip chip--day" id="day-chip">📅 Giornata 1</span>
+    <span class="pill--credits" id="credits-pill">🪙 <span id="credits-value">500</span> ₢</span>
+    <div class="actions" id="phase-actions"></div>
+  </div>
+</header>
+
+<nav class="tabs" id="tabs"></nav>
+<main class="view" id="view"></main>
+
+<div class="toasts" id="toasts"></div>
+<div id="float-layer"></div>
+<div class="overlay hidden" id="overlay"></div>
+<script>
+/* ============================================================================
+   SEZIONE 2 — DATI SPORT / ATLETI, MATEMATICA DELLE QUOTE, CODEC DI SALVATAGGIO
+   (logica pura: nessun accesso al DOM, testabile isolate)
+   ============================================================================ */
+'use strict';
+
+/* ------------------------------ Utility varie ----------------------------- */
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const rnd = (a, b) => a + Math.random() * (b - a);
+const rndInt = (a, b) => Math.floor(rnd(a, b + 1));
+const pick = arr => arr[Math.floor(Math.random() * arr.length)];
+const shuffle = arr => { const a = arr.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1));[a[i], a[j]] = [a[j], a[i]]; } return a; };
+const fmt = n => Math.round(n).toLocaleString('it-IT');
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+/* ------------------------- I 14 SPORT DEL BOTTEGHINO ---------------------- */
+/* kind: 'team' = squadre | 'duo' = coppie | 'solo' = singolo atleta
+   draw:  true → possibile pareggio (esito "X" con quota dedicata)          */
+const SPORTS = [
+  { id: 'calcio',    name: 'Calcio',        icon: '⚽', kind: 'team', draw: true },
+  { id: 'tennis',    name: 'Tennis',        icon: '🎾', kind: 'solo', draw: false },
+  { id: 'pingpong',  name: 'Ping Pong',     icon: '🏓', kind: 'solo', draw: false },
+  { id: 'padel',     name: 'Padel',         icon: '🏸', kind: 'duo',  draw: false },
+  { id: 'basket',    name: 'Street Basket', icon: '🏀', kind: 'solo', draw: false },
+  { id: 'f1',        name: 'Formula 1',     icon: '🏎️', kind: 'solo', draw: false },
+  { id: 'boxe',      name: 'Boxe',          icon: '🥊', kind: 'solo', draw: true },
+  { id: 'mma',       name: 'MMA',           icon: '🥋', kind: 'solo', draw: false },
+  { id: 'pallavolo', name: 'Pallavolo',     icon: '🏐', kind: 'team', draw: false },
+  { id: 'freccette', name: 'Freccette',     icon: '🎯', kind: 'solo', draw: false },
+  { id: 'scacchi',   name: 'Scacchi',       icon: '♟️', kind: 'solo', draw: true },
+  { id: 'cicli',     name: 'Ciclismo',      icon: '🚴', kind: 'solo', draw: false },
+  { id: 'bowling',   name: 'Bowling',       icon: '🎳', kind: 'solo', draw: false },
+  { id: 'curling',   name: 'Curling',       icon: '🥌', kind: 'duo',  draw: false },
+];
+const SPORT_BY_ID = Object.fromEntries(SPORTS.map(s => [s.id, s]));
+
+/* ---------------------- ROSE: parodie di atleti/squadre ------------------- */
+/* [nome, ELO di base 1-100]: il valore subisce un jitter ±4 a ogni nuova
+   carriera, così ogni run è una "stagione" diversa.                        */
+const ROSTERS = {
+  calcio: [
+    ['Real Madrigal', 88], ['Bavaria Monaco', 86], ['FC Barcellena', 84],
+    ['Manchester Festa', 82], ['Paris Saint-Germaino', 80], ['Liverpolpo', 78],
+    ['Juvenctus', 74], ['Milangelo', 72], ['Intermoda', 70], ['Napolione', 68],
+    ['Arsenalenia', 64], ['Chelsea Muffin', 60], ['Borussia Dortmundengo', 55], ['Ataletico Bilbauno', 50],
+  ],
+  tennis: [
+    ['Jannik Peccatore', 92], ['Carlo Alcarez', 90], ['Novak Giochiowski', 86],
+    ['Raffa Nadali', 82], ['Daniil Medvedevolpe', 76], ['Alexandro Zverevino', 72],
+    ['Stefano Tsitsipastore', 68], ['Andrej Rubblev', 64], ['Taylor Fritzellino', 60],
+    ['Holger Runebaum', 56], ['Casper Ruudolfo', 52], ['Matteo Berrettinotti', 48],
+    ['Jack Draperino', 44], ['Luca Nardiño', 38],
+  ],
+  pingpong: [
+    ['Ma Longino', 94], ['Fan Zoletti', 90], ['Timo Bollo', 80],
+    ['Hugo Calderanotto', 78], ['Tomokazu Harimito', 74], ['Felix Lebrunettino', 68],
+    ['Lin Gaoyuano', 66], ['Truls Moreganino', 62], ['Federico Chiesetta', 58],
+    ['Alexis Caliburno', 50], ['Darko Jargicchi', 44], ['Anton Kallbergo', 40],
+  ],
+  padel: [
+    ['Lebronzo & Galandino', 88], ['Coellito & Tappinguello', 84], ['Stupaccio & Sanyetto', 80],
+    ['Rufo & Tito Blanco', 76], ['I Fratelli Sberla', 70], ['Duo Dinamico del Muro', 66],
+    ['Los Veteranos Rápidos', 62], ['I Rampanti del Vetro', 58], ['La Coppia del Cuore', 54],
+    ['Re Mida & Compagni', 50], ['Gli Specialisti del Tocco', 46], ['I Principianti Simpatici', 40],
+  ],
+  basket: [
+    ['LeBron Ginnasio', 95], ['Giannis Antetokumpiro', 91], ['Michael Giordano', 90],
+    ['Nikola Jovicchio', 89], ['Steph Currycchio', 88], ['Luca Donciccoso', 86],
+    ['Kevino Durantella', 85], ['Kobe Brianza', 84], ['James Hardenizzo', 78],
+    ['Kyrio Irvinghio', 74], ['Damiano Lillardino', 72], ['Russello Westbrucco', 60],
+  ],
+  f1: [
+    ['Max Vestappenko', 96], ['Lewis Hamiltoast', 90], ['Charles Leclerico', 84],
+    ['Lando Norrissimo', 80], ['Carlos Sainzius', 76], ['Fernando Alonsolino', 74],
+    ['George Russellino', 70], ['Oscar Piastrico', 68], ['Piero Gaslyno', 55],
+    ['Kevinino Magnussen', 44],
+  ],
+  boxe: [
+    ['Tyson Furioso', 92], ['Oleksandr Usyka', 90], ['Canelo Alvarezino', 84],
+    ['Gervonta Davisini', 80], ['Anthony Gioshua', 78], ['Errol Spank Jr.', 72],
+    ['Deontay Wilderbeast', 68], ['Ryan Garsolino', 60], ['Matteo "Il Martello" Pugliese', 50],
+    ['Ivan da Serie B', 40],
+  ],
+  mma: [
+    ['Jon Jonesetto', 94], ['Khabib Nurmagonomedov', 90], ['Alexander Volkanovskij', 85],
+    ['Israel Adesagnolo', 82], ['Connor McGreghorioso', 76], ['Charles Oliveiraio', 74],
+    ['Max Hollowayano', 70], ['Dustin Poirierino', 66], ['Jorge Masvidallo', 58],
+    ['Fabio "Rissa" Rossini', 44],
+  ],
+  pallavolo: [
+    ['Trentino Volato', 84], ['Perugia Schiacciasassi', 82], ['Civitanova Lube Onward', 78],
+    ['Modena Valvolina', 74], ['Milano Power', 70], ['Piacenzona', 66],
+    ['Verona Sballo', 62], ['Monza Brianza Bomba', 58], ['Bologna Block', 54],
+    ['Ravenna Rimbalzo', 50], ['Siena Servizio', 46], ['Grottazzolina Grottesca', 42],
+  ],
+  freccette: [
+    ['Michael van Gerwenno', 90], ['Phil Il Precisore', 88], ['Luke Littlerino', 86],
+    ['Peter Wrightino', 74], ['Gerwyn Prezzemolo', 72], ['Michael Smithello', 68],
+    ['Robbiero Crossino', 62], ['Gary "Baffone" Andersonide', 58], ['Nathan Aspinallergico', 54],
+    ['Damon Hetto', 46],
+  ],
+  scacchi: [
+    ['Magnus Carlsenno', 96], ['Gukesh Dominatore', 88], ['Hikaru Nakamuro', 86],
+    ['Fabiano Caruano', 84], ['Arjun Erigaisino', 80], ['Anish Girigiri', 76],
+    ['Maxime Vachier-Lagraveggio', 72], ['Wesley So-So', 70], ['Leinier Dominguinho', 60],
+    ['Sergey Karjakinno', 54],
+  ],
+  cicli: [
+    ['Tadej Pogacarzo', 92], ['Jonas Vingegaardino', 90], ['Remco Eveneposteriore', 86],
+    ['Mathieu Van der Poelli', 80], ['Primoz Roglicano', 78], ['Wout Van Aertiginio', 76],
+    ['Filippo Gannone', 70], ['Mark Cavendishetto', 66], ['Peter Saganino', 62],
+    ['Vincenzo "Lo Squalo" Nibalino', 44],
+  ],
+  bowling: [
+    ['Jason Belmonte-e-Forse', 88], ['EJ Tackettino', 82], ['Antonio Canaleta', 76],
+    ['Chris Barnes & Noble', 74], ['Bill O\'Neillleremi', 68], ['Franco Birillo', 60],
+    ['Michele Boletti', 58], ['Il Re dello Strike Pierino', 52], ['Gigi Bocciardo', 46],
+    ['Rocco Chiazza', 40],
+  ],
+  curling: [
+    ['Il Gufo & Il Battipista', 84], ['Le Scope Magiche', 80], ['Squadra Igloo', 76],
+    ['I Granitori di Ghiaccio', 72], ['Frizione Perfetta', 68], ['Pietra Miliare & C.', 64],
+    ['I Broomstick di Bisceglie', 60], ['Sweep & Pray', 56], ['Gli Yeti Urbani', 52],
+    ['Il Curling Club del Bar', 46],
+  ],
+};
+
+/* ===================== GENERATORE QUOTE DINAMICO DA ELO ==================== */
+/* Modello logistico alla Elo: la probabilità di vittoria dipende solo dal
+   divario di "Bravura" (ELO effettivo = base + forma). Scale=30 → un divario
+   di ~99 punti porta p≈0.96, che con margine 0.95 e clamp produce le quote
+   polari richieste: 1.05 per il favorito, 8.50 per lo sfavorito.
+   Il "margine" è il vig del banco: quote = margine / probabilità.           */
+const ELO_SCALE = 30;
+const ODDS_MIN = 1.05, ODDS_MAX = 8.50;
+
+function winProb(eloA, eloB) {
+  return 1 / (1 + Math.exp(-(eloA - eloB) / ELO_SCALE));
+}
+
+function computeOdds(effA, effB, drawSport, margin = 0.95) {
+  const p = winProb(effA, effB);
+  const out = {};
+  if (drawSport) {
+    /* probabilità di pareggio: massima in caso di parità di ELO, nulla al
+       crescere del divario; il clamp delle quote garantisce i poli 1.05/8.50 */
+    const gap = Math.abs(effA - effB);
+    const pX = clamp(0.27 * Math.exp(-Math.pow(gap / 38, 2)), 0.03, 0.30);
+    const p1 = (1 - pX) * p;
+    const p2 = (1 - pX) * (1 - p);
+    out['1'] = clamp(round2(margin / p1), ODDS_MIN, ODDS_MAX);
+    out['X'] = clamp(round2(margin / pX), ODDS_MIN, ODDS_MAX);
+    out['2'] = clamp(round2(margin / p2), ODDS_MIN, ODDS_MAX);
+  } else {
+    out['1'] = clamp(round2(margin / p), ODDS_MIN, ODDS_MAX);
+    out['2'] = clamp(round2(margin / (1 - p)), ODDS_MIN, ODDS_MAX);
+  }
+  return out;
+}
+const round2 = v => Math.round(v * 100) / 100;
+
+/* Probabilità "vere" usate dalla simulazione (senza clamp da banco):
+   sono coerenti con il modello delle quote, ma il clamp polare del banco
+   rende le quote estreme leggermente sfavorite — è il prezzo del vig.     */
+function trueOutcomeProbs(effA, effB, drawSport) {
+  const p = winProb(effA, effB);
+  if (!drawSport) return { '1': p, '2': 1 - p };
+  const gap = Math.abs(effA - effB);
+  const pDraw = clamp(0.27 * Math.exp(-Math.pow(gap / 38, 2)), 0.03, 0.30);
+  return { '1': (1 - pDraw) * p, 'X': pDraw, '2': (1 - pDraw) * (1 - p) };
+}
+
+/* --------- ELO visibile: stelle (5 bucket) o numero con Insider --------- */
+function starsFromElo(elo) {
+  const n = clamp(Math.ceil(elo / 20), 1, 5);
+  return '★'.repeat(n) + '☆'.repeat(5 - n);
+}
+
+/* ------------------- Etiichette punteggi per disciplina ------------------ */
+function scoreLabel(sportId, outcome) {
+  const w = outcome === '1' ? 0 : 1; // 0 = vince il "casa", 1 = vince il "fuori"
+  switch (sportId) {
+    case 'calcio':    return outcome === 'X' ? pick(['0-0', '1-1', '2-2']) : (w ? `${rndInt(0, 2)}-${rndInt(1, 4)}` : `${rndInt(1, 4)}-${rndInt(0, 2)}`);
+    case 'tennis':    return `${2}-${rndInt(0, 1)}`;
+    case 'pingpong':  return `${4}-${rndInt(0, 3)}`;
+    case 'padel':     return pick(['6-4 / 6-3', '6-2 / 6-4', '7-5 / 6-1', '6-3 / 7-5']);
+    case 'basket':    { const hi = rndInt(78, 112), lo = hi - rndInt(2, 22); return w ? `${lo}-${hi}` : `${hi}-${lo}`; }
+    case 'f1':        return `+${rnd(0.2, 9.5).toFixed(3)}s`;
+    case 'boxe':      return outcome === 'X' ? 'Pareggio 94-94' : pick([`KO al ${rndInt(3, 12)}°`, `Punti 97-93`, `Punti 96-94`, `KO Tecnico R${rndInt(1, 4)}`]);
+    case 'mma':       return pick([`KO R${rndInt(1, 3)}`, `Sottomissione R${rndInt(1, 3)}`, 'Decisione Unanime 29-28', 'TKO R' + rndInt(2, 5)]);
+    case 'pallavolo': return `${3}-${rndInt(0, 2)}`;
+    case 'freccette': return `${rndInt(4, 7)}-${rndInt(2, 5)}`;
+    case 'scacchi':   return outcome === 'X' ? '½ - ½' : (w ? '0 - 1' : '1 - 0');
+    case 'cicli':     return `+${rnd(0.1, 4).toFixed(1)}s`;
+    case 'bowling':   { const hi = rndInt(210, 279), lo = hi - rndInt(5, 60); return w ? `${lo}-${hi}` : `${hi}-${lo}`; }
+    case 'curling':   return `${rndInt(5, 10)}-${rndInt(2, 4)}`;
+    default:          return 'VS';
+  }
+}
+
+/* =================== OFFUSCAMENTO / FIRMA DEL SALVATAGGIO ================== */
+/* Pipeline: JSON → hash FNV-1a(JSON + SALT) → Base64(JSON) + '.' + hash.
+   Se all'avvio l'hash ricalcolato non combacia (dump modificato a mano,
+   Base64 manomessa, JSON corrotto) → frode sportiva: reset + alert.       */
+const SAVE_KEY = 'botteghino.save.v1';
+const SALT = 'b0tt3ch1n0-2026-s3gr3t0-f1nt4-n0n-t0cc4r3';
+
+function fnv1a(str) {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return h.toString(36);
+}
+function toB64(str) {
+  const bytes = new TextEncoder().encode(str);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+function fromB64(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new TextDecoder().decode(bytes);
+}
+function encodeSave(state) {
+  const json = JSON.stringify(state);
+  return toB64(json) + '.' + fnv1a(json + SALT);
+}
+/* Ritorna { ok:true, state } | { ok:false, fraud:true } | { ok:false } */
+function decodeSave(raw) {
+  try {
+    const dot = raw.lastIndexOf('.');
+    if (dot < 0) return { ok: false, fraud: true };
+    const json = fromB64(raw.slice(0, dot));
+    const hash = raw.slice(dot + 1);
+    if (fnv1a(json + SALT) !== hash) return { ok: false, fraud: true };
+    const state = JSON.parse(json);
+    if (!validateState(state)) return { ok: false, fraud: true };
+    return { ok: true, state };
+  } catch (e) {
+    return { ok: false, fraud: true };
+  }
+}
+/* Sanity check dello schema: tipi e range plausibili (anti injection). */
+function validateState(s) {
+  const num = v => typeof v === 'number' && isFinite(v);
+  if (!s || typeof s !== 'object') return false;
+  if (!num(s.day) || !num(s.credits) || s.credits < 0 || s.day < 1) return false;
+  if (s.credits > 1e9 || s.day > 100000) return false;
+  if (!s.entities || typeof s.entities !== 'object') return false;
+  if (!Array.isArray(s.matches) || !Array.isArray(s.placedBets)) return false;
+  if (!s.skills || typeof s.skills !== 'object') return false;
+  for (const e of Object.values(s.entities)) {
+    if (!e || typeof e.name !== 'string' || !num(e.elo) || e.elo < 1 || e.elo > 100) return false;
+  }
+  if (!s.lifetime || !num(s.lifetime.wagered)) return false;
+  return true;
+}
+</script>
+<script>
+/* ============================================================================
+   SEZIONE 3 — SKILL TREE (16 nodi: radice + 15 upgrade) E STORE PROTETTO
+   Lo stato vive dentro una closure: nessun riferimento mutabile finisce su
+   window. API pubblica congelata: { dispatch, subscribe, getState }.
+   ============================================================================ */
+'use strict';
+
+/* Copia congelata in profondità per la vista: nessun componente può mutare
+   lo stato dal di fuori (anti `player.coins = 9999999` dalla console). */
+function deepFreeze(o) {
+  if (o && typeof o === 'object' && !Object.isFrozen(o)) {
+    Object.freeze(o);
+    for (const k of Object.keys(o)) deepFreeze(o[k]);
+  }
+  return o;
+}
+
+/* ------------------------------ Skill tree -------------------------------- */
+const SKILLS = {
+  root:       { name: 'Scommettitore Novellino', icon: '🎲', cost: 0,   parent: null,        pos: { x: 500, y: 480 },
+                desc: 'Il punto di partenza di ogni carriera al botteghino. Hai 500₢, un tavolino e un sogno.' },
+  multiple:   { name: 'Multiple',                icon: '🎫', cost: 150, parent: 'root',      pos: { x: 500, y: 330 },
+                desc: 'Sblocca la Modalità Multipla: combina più eventi in una schedina unica. Le quote si moltiplicano… come il rischio.' },
+  quote:      { name: 'Quote Maggiorate',        icon: '💰', cost: 100, parent: 'root',      pos: { x: 650, y: 480 },
+                desc: '+5% su ogni vincita. Il banco piange in silenzio.' },
+  insider:    { name: 'Insider',                 icon: '🕵️', cost: 120, parent: 'root',      pos: { x: 500, y: 630 },
+                desc: "Svela l'ELO esatto di ogni atleta e squadra al posto delle stelline. L'informazione è denaro." },
+  sponsor1:   { name: 'Sponsor Minore',          icon: '📦', cost: 200, parent: 'root',      pos: { x: 350, y: 480 },
+                desc: 'Un cartellone pubblicitario sulla tua saracinesca: +15₢ all’inizio di ogni giornata.' },
+  talento:    { name: 'Talento dei Multipli',    icon: '🧮', cost: 250, parent: 'multiple',  pos: { x: 328, y: 234 },
+                desc: '+10% sulle vincite delle multiple. Il matematico del bar ti fa un cenno di rispetto.' },
+  cashout:    { name: 'Cashout Anticipato',      icon: '🔙', cost: 300, parent: 'multiple',  pos: { x: 672, y: 234 },
+                desc: 'Vendi una scommessa ancora aperta prima della simulazione: incassi subito un valore ridotto.' },
+  banco:      { name: 'Banco Matto',             icon: '🎰', cost: 300, parent: 'quote',     pos: { x: 746, y: 308 },
+                desc: 'Altro +5% sulle vincite, si somma a Quote Maggiorate (+10% totale).' },
+  commissione:{ name: 'Commissione Amica',       icon: '🤝', cost: 250, parent: 'quote',     pos: { x: 746, y: 652 },
+                desc: 'Una parolina col direttore: il margine bancario cala e tutte le quote migliorano (margine 0.95 → 0.97).' },
+  statistico: { name: 'Statistico',              icon: '📊', cost: 200, parent: 'insider',   pos: { x: 672, y: 726 },
+                desc: 'Mostra gli ultimi 5 risultati (V/S/P) di ogni sfidante: leggi la forma reale, non le voci del bar.' },
+  lince:      { name: 'Occhio di Lince',         icon: '👁️', cost: 350, parent: 'insider',   pos: { x: 328, y: 726 },
+                desc: "Oltre all'ELO vedi anche il valore numerico della forma del momento (±)." },
+  sponsor2:   { name: 'Sponsor Maggiore',        icon: '🏟️', cost: 400, parent: 'sponsor1',  pos: { x: 254, y: 652 },
+                desc: 'La Tua Saracinesca™ diventa un media partner: altri +40₢ ogni giornata.' },
+  rimborso:   { name: 'Rimborso Sconfitta',      icon: '🛟', cost: 250, parent: 'sponsor1',  pos: { x: 254, y: 308 },
+                desc: 'Il 10% di ogni puntata singola persa torna nel portafoglio. Perdere costa un po’ meno.' },
+  interesse:  { name: 'Interesse Composto',      icon: '🏦', cost: 500, parent: 'banco',     pos: { x: 925, y: 366 },
+                desc: '+1% di interessi sui crediti a inizio giornata (max +100₢ al giorno).' },
+  segnale:    { name: 'Segnale dall’Insider',    icon: '💡', cost: 450, parent: 'statistico',pos: { x: 614, y: 905 },
+                desc: 'Una volta per giornata, il Pronostico dell’Insider ti rivela l’esito vero di una partita.' },
+  protetta:   { name: 'Puntata Protetta',        icon: '🛡️', cost: 450, parent: 'rimborso',  pos: { x: 314, y: 81 },
+                desc: 'La prima puntata singola persa di ogni giornata viene rimborsata al 100%.' },
+};
+const hasSkill = (state, id) => !!state.skills[id];
+/* Un nodo è VISIBILE se posseduto o se il genitore è posseduto (root sempre). */
+const isNodeVisible = (state, id) => {
+  if (id === 'root' || hasSkill(state, id)) return true;
+  const sk = SKILLS[id];
+  return sk && sk.parent ? hasSkill(state, sk.parent) : false;
+};
+
+/* --------------------------- Stato iniziale ------------------------------- */
+function buildEntities() {
+  const entities = {};
+  for (const sport of SPORTS) {
+    ROSTERS[sport.id].forEach(([name, baseElo], i) => {
+      const id = sport.id + '_' + i;
+      entities[id] = {
+        id, sport: sport.id, name,
+        elo: clamp(Math.round(baseElo + rnd(-4, 4)), 1, 100), // jitter: nuova "stagione" ogni run
+        form: 0, last5: [],
+      };
+    });
+  }
+  return entities;
+}
+const effElo = e => clamp(e.elo + e.form, 1, 100);
+
+function bookMargin(state) { return hasSkill(state, 'commissione') ? 0.97 : 0.95; }
+
+function generateDay(state) {
+  const count = rndInt(5, 12);
+  const sportsPool = [];
+  while (sportsPool.length < count) sportsPool.push(...shuffle(SPORTS));
+  const usedPairs = new Set();
+  const matches = [];
+  for (let i = 0; i < count; i++) {
+    const sport = sportsPool[i];
+    const ids = Object.values(state.entities).filter(e => e.sport === sport.id).map(e => e.id);
+    let home = null, away = null;
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const [a, b] = shuffle(ids).slice(0, 2);
+      const key = [a, b].sort().join('|');
+      if (usedPairs.has(key)) continue;
+      const gap = Math.abs(effElo(state.entities[a]) - effElo(state.entities[b]));
+      if (attempt < 6 && gap > 30 && Math.random() < 0.75) continue; // 75%: cerca coppie equilibrate
+      home = a; away = b; usedPairs.add(key); break;
+    }
+    if (!home) continue;
+    const eA = state.entities[home], eB = state.entities[away];
+    const odds = computeOdds(effElo(eA), effElo(eB), sport.draw, bookMargin(state));
+    /* Il "destino" della giornata è già scritto (nascosto) serve al skill
+       Segnale e alla simulazione: niente rigenerazioni a tradimento.      */
+    const probs = trueOutcomeProbs(effElo(eA), effElo(eB), sport.draw);
+    const outcome = rollOutcome(probs);
+    matches.push({
+      id: 'm' + i + '_' + rndInt(100, 999), sport: sport.id, home, away,
+      odds, revealed: false,
+      result: { outcome, score: scoreLabel(sport.id, outcome) },
+    });
+  }
+  const signalMatch = hasSkill(state, 'segnale') && matches.length ? pick(matches).id : null;
+  return {
+    matches, signalMatch,
+    slip: { mode: state.slip ? state.slip.mode : 'single', selections: [], multiStake: 10 },
+    phase: 'betting', protettaUsed: false, lastReveal: null, lastSummary: null,
+    dayLog: { wagered: 0, returned: 0 },
+  };
+}
+function rollOutcome(probs) {
+  const r = Math.random();
+  let acc = 0;
+  for (const k of ['1', 'X', '2']) { acc += probs[k] || 0; if (r < acc) return k; }
+  return '2';
+}
+
+function createInitialState() {
+  return {
+    v: 1, day: 1, credits: 500,
+    entities: buildEntities(),
+    matches: [], signalMatch: null,
+    slip: { mode: 'single', selections: [], multiStake: 10 },
+    placedBets: [],
+    phase: 'betting',
+    skills: { root: true },
+    protettaUsed: false,
+    dayLog: { wagered: 0, returned: 0 },
+    lastReveal: null, lastSummary: null,
+    lifetime: { wagered: 0, won: 0, lost: 0, refunds: 0, betsPlaced: 0, betsWon: 0, biggestWin: 0, multisWon: 0, daysSimulated: 0 },
+    history: [],
+  };
+}
+
+/* ------------------------------ Riduttore --------------------------------- */
+function payoutMultiplier(state, type) {
+  let m = 1;
+  if (hasSkill(state, 'quote')) m *= 1.05;
+  if (hasSkill(state, 'banco')) m *= 1.05;
+  if (type === 'multi' && hasSkill(state, 'talento')) m *= 1.10;
+  return m;
+}
+function legsOddsTotal(legs) { return legs.reduce((acc, l) => acc * l.odds, 1); }
+
+function settleDay(s) {
+  /* 1) aggiorna ELO/forma/ultimi5 di ogni sfidante (K-factor classico) */
+  const entities = { ...s.entities };
+  const K = 6;
+  for (const m of s.matches) {
+    if (!m.result) continue;
+    const A = { ...entities[m.home] }, B = { ...entities[m.away] };
+    const p = winProb(effElo(A), effElo(B));
+    const o = m.result.outcome;
+    if (o === '1') { A.elo = clamp(A.elo + K * (1 - p), 1, 100); B.elo = clamp(B.elo - K * (1 - p), 1, 100); A.form = clamp(A.form + 1.5, -8, 8); B.form = clamp(B.form - 1.5, -8, 8); A.last5 = push5(A.last5, 'V'); B.last5 = push5(B.last5, 'S'); }
+    else if (o === '2') { B.elo = clamp(B.elo + K * p, 1, 100); A.elo = clamp(A.elo - K * p, 1, 100); B.form = clamp(B.form + 1.5, -8, 8); A.form = clamp(A.form - 1.5, -8, 8); B.last5 = push5(B.last5, 'V'); A.last5 = push5(A.last5, 'S'); }
+    else { A.elo = clamp(A.elo + K * (0.5 - p), 1, 100); B.elo = clamp(B.elo + K * (0.5 - (1 - p)), 1, 100); A.last5 = push5(A.last5, 'P'); B.last5 = push5(B.last5, 'P'); }
+    entities[m.home] = A; entities[m.away] = B;
+  }
+  /* 2) chiude le scommesse: pagamenti, rimborsi, protetta */
+  const placedBets = s.placedBets.map(b => ({ ...b }));
+  let credits = s.credits;
+  let refunds = 0, returned = 0;
+  let protettaAvailable = hasSkill(s, 'protetta') && !s.protettaUsed;
+  const results = [];
+  for (const b of placedBets) {
+    if (b.status !== 'pending') continue;
+    const won = b.legs.every(l => {
+      const m = s.matches.find(x => x.id === l.matchId);
+      return m && m.result && m.result.outcome === l.pick;
+    });
+    if (won) {
+      b.payout = Math.round(b.stake * legsOddsTotal(b.legs) * payoutMultiplier(s, b.type));
+      b.status = 'won';
+      credits += b.payout; returned += b.payout;
+    } else {
+      b.status = 'lost'; b.payout = 0;
+      if (b.type === 'single') {
+        if (protettaAvailable) { refunds += b.stake; credits += b.stake; returned += b.stake; b.refund = b.stake; b.protected = true; protettaAvailable = false; }
+        else if (hasSkill(s, 'rimborso')) { const r = Math.round(b.stake * 0.10); refunds += r; credits += r; returned += r; b.refund = r; }
+      }
+    }
+    results.push({ id: b.id, type: b.type, status: b.status, payout: b.payout, refund: b.refund || 0, stake: b.stake });
+  }
+  const protettaUsed = s.protettaUsed || results.some(r => r.refund > 0 && r.refund === r.stake);
+  /* 3) statistiche di carriera */
+  const wageredToday = placedBets.filter(b => b.day === s.day).reduce((a, b) => a + b.stake, 0);
+  const wonBets = results.filter(r => r.status === 'won');
+  const lifetime = {
+    ...s.lifetime,
+    won: s.lifetime.won + results.reduce((a, r) => a + r.payout, 0),
+    lost: s.lifetime.lost + results.filter(r => r.status === 'lost').reduce((a, r) => a + r.stake, 0),
+    refunds: s.lifetime.refunds + refunds,
+    betsWon: s.lifetime.betsWon + wonBets.length,
+    biggestWin: Math.max(s.lifetime.biggestWin, ...wonBets.map(r => r.payout), 0),
+    multisWon: s.lifetime.multisWon + wonBets.filter(r => r.type === 'multi').length,
+    daysSimulated: s.lifetime.daysSimulated + 1,
+  };
+  const history = [...s.history, { day: s.day, wagered: wageredToday, returned: Math.round(returned), net: Math.round(returned - wageredToday) }].slice(-40);
+  return {
+    ...s, entities, placedBets, credits: Math.round(credits), protettaUsed,
+    lifetime, history, phase: 'summary', lastReveal: null,
+    lastSummary: { day: s.day, wagered: wageredToday, returned: Math.round(returned), net: Math.round(returned - wageredToday), results },
+    dayLog: { ...s.dayLog, returned: Math.round((s.dayLog.returned || 0) + returned) },
+  };
+}
+const push5 = (arr, v) => [v, ...arr].slice(0, 5);
+
+/* ------------------------------- Reducer ---------------------------------- */
+function reduce(state, action) {
+  const s = state;
+  switch (action.type) {
+    case 'NEW_GAME': {
+      const fresh = createInitialState();
+      return { ...fresh, ...generateDay(fresh) };
+    }
+
+    case 'TOGGLE_SELECTION': {
+      if (s.phase !== 'betting') return s;
+      const { matchId, pick } = action;
+      const sel = s.slip.selections.filter(x => x.matchId !== matchId);
+      const exists = s.slip.selections.some(x => x.matchId === matchId && x.pick === pick);
+      if (!exists) sel.push({ matchId, pick, stake: 10 });
+      return { ...s, slip: { ...s.slip, selections: sel } };
+    }
+    case 'REMOVE_SELECTION': {
+      const selections = s.slip.selections.filter((_, i) => i !== action.index);
+      return { ...s, slip: { ...s.slip, selections } };
+    }
+    case 'SET_STAKE': {
+      const v = clamp(Math.floor(Number(action.value) || 0), 0, 1e6);
+      if (action.index === 'multi') return { ...s, slip: { ...s.slip, multiStake: v } };
+      const selections = s.slip.selections.map((x, i) => i === action.index ? { ...x, stake: v } : x);
+      return { ...s, slip: { ...s.slip, selections } };
+    }
+    case 'SET_MODE':
+      return { ...s, slip: { ...s.slip, mode: action.mode } };
+    case 'CLEAR_SLIP':
+      return { ...s, slip: { ...s.slip, selections: [] } };
+
+    case 'PLACE_BETS': {
+      if (s.phase !== 'betting') return { ...s, _err: 'La giornata è già in corso.' };
+      const newBets = [];
+      if (s.slip.mode === 'multi' && hasSkill(s, 'multiple')) {
+        if (s.slip.selections.length < 2) return { ...s, _err: 'Una multipla richiede almeno 2 eventi.' };
+        const stake = clamp(Math.floor(action.multiStake) || 0, 0, 1e6);
+        if (stake < 5) return { ...s, _err: 'Puntata minima: 5₢.' };
+        const legs = s.slip.selections.map(x => ({ matchId: x.matchId, pick: x.pick, odds: oddsFor(s, x.matchId, x.pick) }));
+        newBets.push({ id: 'b' + Date.now().toString(36) + rndInt(10, 99), day: s.day, type: 'multi', legs, stake, status: 'pending' });
+      } else {
+        for (const x of s.slip.selections) {
+          if (x.stake < 5) continue;
+          newBets.push({ id: 'b' + Date.now().toString(36) + rndInt(10, 99) + newBets.length, day: s.day, type: 'single', legs: [{ matchId: x.matchId, pick: x.pick, odds: oddsFor(s, x.matchId, x.pick) }], stake: x.stake, status: 'pending' });
+        }
+        if (!newBets.length) return { ...s, _err: 'Imposta almeno una puntata valida (min 5₢).' };
+      }
+      const tot = newBets.reduce((a, b) => a + b.stake, 0);
+      if (tot > s.credits) return { ...s, _err: `Crediti insufficienti: servono ${fmt(tot)}₢, ne hai ${fmt(s.credits)}.` };
+      return {
+        ...s,
+        credits: s.credits - tot,
+        placedBets: [...s.placedBets, ...newBets],
+        slip: { ...s.slip, selections: [] },
+        lifetime: { ...s.lifetime, wagered: s.lifetime.wagered + tot, betsPlaced: s.lifetime.betsPlaced + newBets.length },
+        dayLog: { ...s.dayLog, wagered: s.dayLog.wagered + tot },
+      };
+    }
+    case 'CASHOUT': {
+      if (s.phase !== 'betting' || !hasSkill(s, 'cashout')) return s;
+      const bet = s.placedBets.find(b => b.id === action.betId && b.status === 'pending');
+      if (!bet) return s;
+      const value = Math.round(bet.stake * (1 + 0.45 * (legsOddsTotal(bet.legs) - 1)));
+      const placedBets = s.placedBets.map(b => b.id === bet.id ? { ...b, status: 'cashed', payout: value } : b);
+      return {
+        ...s, placedBets, credits: s.credits + value,
+        dayLog: { ...s.dayLog, returned: s.dayLog.returned + value },
+        _info: `Cashout incassato: +${fmt(value)}₢`,
+      };
+    }
+    case 'START_SIM':
+      return { ...s, phase: 'simulating', slip: { ...s.slip, selections: [] }, lastReveal: null };
+    case 'REVEAL_NEXT': {
+      const m = s.matches.find(x => !x.revealed);
+      if (!m) return s;
+      const matches = s.matches.map(x => x.id === m.id ? { ...x, revealed: true } : x);
+      return { ...s, matches, lastReveal: m.id };
+    }
+    case 'SETTLE':
+      return settleDay(s);
+    case 'NEXT_DAY': {
+      let credits = s.credits;
+      let notes = [];
+      const sponsor = (hasSkill(s, 'sponsor1') ? 15 : 0) + (hasSkill(s, 'sponsor2') ? 40 : 0);
+      if (sponsor) { credits += sponsor; notes.push(`sponsor +${sponsor}₢`); }
+      if (hasSkill(s, 'interesse')) { const int = Math.min(100, Math.round(credits * 0.01)); credits += int; notes.push(`interessi +${int}₢`); }
+      /* deriva della forma: random walk smorzato per tutti gli atleti */
+      const entities = {};
+      for (const e of Object.values(s.entities)) {
+        entities[e.id] = { ...e, form: clamp(Math.round((e.form * 0.85 + rnd(-1.2, 1.2)) * 10) / 10, -8, 8) };
+      }
+      const base = { ...s, day: s.day + 1, credits: Math.round(credits), entities, placedBets: s.placedBets.filter(b => false) };
+      const fresh = generateDay(base);
+      return { ...base, ...fresh, _notes: notes };
+    }
+    case 'BUY_SKILL': {
+      const sk = SKILLS[action.id];
+      if (!sk || hasSkill(s, action.id)) return s;
+      if (!isNodeVisible(s, action.id)) return { ...s, _err: 'Nodo non ancora svelato.' };
+      if (s.credits < sk.cost) return { ...s, _err: `Ti servono ${fmt(sk.cost)}₢ per "${sk.name}".` };
+      const skills = { ...s.skills, [action.id]: true };
+      let matches = s.matches, signalMatch = s.signalMatch;
+      /* effetti immediati dove ha senso: la tavola dei prezzi si aggiorna ora */
+      if (action.id === 'commissione' && s.phase === 'betting') {
+        matches = s.matches.map(m => {
+          const eA = s.entities[m.home], eB = s.entities[m.away];
+          return { ...m, odds: computeOdds(effElo(eA), effElo(eB), SPORT_BY_ID[m.sport].draw, 0.97) };
+        });
+      }
+      if (action.id === 'segnale' && s.phase === 'betting' && s.matches.length && !s.signalMatch) {
+        signalMatch = pick(s.matches).id;
+      }
+      return { ...s, credits: s.credits - sk.cost, skills, matches, signalMatch, _info: `Abilità sbloccata: ${sk.name}!` };
+    }
+    default:
+      return s;
+  }
+}
+function oddsFor(s, matchId, pick) {
+  const m = s.matches.find(x => x.id === matchId);
+  return m ? m.odds[pick] : 1;
+}
+
+/* --------------------- STORE: closure + persistenza ----------------------- */
+const Game = (function () {
+  let state = null;                       // PRIVATO: invisibile da window/console
+  const listeners = new Set();
+
+  function persist() {
+    try { localStorage.setItem(SAVE_KEY, encodeSave(state)); } catch (e) { /* quota piena: si continua in RAM */ }
+  }
+  function emit() { for (const fn of listeners) { try { fn(getState()); } catch (e) { console.error(e); } } }
+  function getState() { return deepFreeze(structuredClone(state)); }
+
+  function boot() {
+    let fraud = false;
+    try {
+      const raw = localStorage.getItem(SAVE_KEY);
+      if (raw) {
+        const res = decodeSave(raw);
+        if (res.ok) state = res.state;
+        else if (res.fraud) fraud = true;
+      }
+    } catch (e) { fraud = true; }
+    if (fraud) {
+      localStorage.removeItem(SAVE_KEY);
+      state = createInitialState();
+      persist();
+      alert('Squalificato per frode sportiva 🚫\n\nIl salvataggio è stato manomesso e la carriera è stata azzerata.');
+    }
+    if (!state) state = createInitialState();
+    /* recupero da chiusura durante la simulazione: la giornata si chiude subito */
+    if (state.phase === 'simulating') { state = settleDay(state); persist(); }
+    if (!state.matches.length) { state = { ...state, ...generateDay(state) }; persist(); }
+  }
+  boot();
+
+  function dispatch(action) {
+    const prev = state;
+    const next = reduce(prev, action);
+    if (next === prev) return { ok: false };
+    const err = next._err, info = next._info, notes = next._notes;
+    const clean = { ...next }; delete clean._err; delete clean._info; delete clean._notes;
+    state = clean;
+    if (!action.noSave) persist();        // AUTOSAVE a ogni azione che cambia lo stato
+    if (!action.silent) emit();           // silent: aggiorna lo stato senza re-render (focus input)
+    return { ok: !err, err, info, notes };
+  }
+
+  function subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); }
+
+  return Object.freeze({ dispatch, subscribe, getState, persist });
+})();
+/* Unica superficie pubblica: nessun campo mutabile, nessun accesso allo stato grezzo. */
+window.BT = Game;
+
+/* -------------------- Anti-cheat: input e devtools ------------------------ */
+document.addEventListener('contextmenu', e => { e.preventDefault(); });
+document.addEventListener('keydown', e => {
+  const k = (e.key || '').toUpperCase();
+  if (e.key === 'F12' || (e.ctrlKey && e.shiftKey && (k === 'I' || k === 'J' || k === 'C'))) {
+    e.preventDefault();
+  }
+});
+window.addEventListener('beforeunload', () => Game.persist());
+</script>
+<script>
+/* ============================================================================
+   SEZIONE 4 — COMPONENTI UI PRINCIPALI (stile React: render puro da stato)
+   Il flusso è unidirezionale:  UI → dispatch(action) → reducer → emit → render
+   ============================================================================ */
+'use strict';
+
+const $ = sel => document.querySelector(sel);
+const CREDIT = '₢';
+const money = v => fmt(v) + CREDIT;
+
+/* -------------------- stato UI transiente (non salvato) ------------------- */
+const ui = {
+  tab: 'day',
+  prevCredits: null,
+  selectedSkill: null,
+  statsSport: 'all',
+  prevVisibleSkills: null,
+  simTimer: null,
+  introDone: localStorage.getItem('botteghino.intro') === '1',
+};
+
+/* ------------------------------- Toast ------------------------------------ */
+function toast(msg, type = 'info', ms = 3400) {
+  const box = $('#toasts');
+  const el = document.createElement('div');
+  el.className = 'toast toast--' + type;
+  el.textContent = msg;
+  box.appendChild(el);
+  while (box.children.length > 4) box.firstChild.remove();
+  setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 320); }, ms);
+}
+
+/* ------------------- Monete che salgono / scendono ------------------------ */
+function coinFloat(delta) {
+  const layer = $('#float-layer');
+  const pill = $('#credits-pill');
+  if (!pill) return;
+  const r = pill.getBoundingClientRect();
+  const chips = Math.min(5, Math.max(1, Math.round(Math.abs(delta) / 80)));
+  for (let i = 0; i < chips; i++) {
+    const el = document.createElement('span');
+    el.className = 'float-coin ' + (delta >= 0 ? 'float-coin--up' : 'float-coin--down');
+    el.textContent = (delta >= 0 ? '+' : '−') + money(Math.abs(Math.round(delta / chips)));
+    el.style.left = (r.left + r.width * (0.15 + 0.7 * Math.random())) + 'px';
+    el.style.top = (r.top - 8 + rnd(-14, 14)) + 'px';
+    el.style.animationDelay = (i * 130) + 'ms';
+    layer.appendChild(el);
+    setTimeout(() => el.remove(), 1500 + i * 130);
+  }
+}
+function tweenCredits(from, to) {
+  const el = $('#credits-value');
+  const dur = 550, t0 = performance.now();
+  const step = now => {
+    const k = clamp((now - t0) / dur, 0, 1);
+    const ease = 1 - Math.pow(1 - k, 3);
+    el.textContent = fmt(from + (to - from) * ease);
+    if (k < 1) requestAnimationFrame(step); else el.textContent = fmt(to);
+  };
+  requestAnimationFrame(step);
+}
+
+/* ------------------------- dispatch + feedback ----------------------------- */
+function act(action) {
+  const res = BT.dispatch(action);
+  if (res.err) toast('⚠️ ' + res.err, 'err');
+  if (res.info) toast(res.info, 'ok');
+  if (res.notes && res.notes.length) toast('🌅 Nuova giornata: ' + res.notes.join(' · '), 'gold', 4200);
+  return res;
+}
+
+/* ============================== TOPBAR ==================================== */
+function renderTopbar(st) {
+  $('#day-chip').textContent = '📅 Giornata ' + st.day;
+  const pill = $('#credits-pill');
+  $('#credits-value').textContent = fmt(st.credits);
+  if (ui.prevCredits !== null && st.credits !== ui.prevCredits) {
+    const delta = st.credits - ui.prevCredits;
+    pill.classList.remove('bump-up', 'bump-down');
+    void pill.offsetWidth;
+    pill.classList.add(delta > 0 ? 'bump-up' : 'bump-down');
+    tweenCredits(ui.prevCredits, st.credits);
+    coinFloat(delta);
+  }
+  ui.prevCredits = st.credits;
+
+  const actions = $('#phase-actions');
+  if (st.phase === 'betting') {
+    actions.innerHTML = `<button class="btn btn--primary" data-action="sim">▶ Simula Giornata</button>`;
+  } else if (st.phase === 'simulating') {
+    actions.innerHTML = `<button class="btn btn--primary" disabled>⏳ Simulazione…</button>`;
+  } else {
+    actions.innerHTML = `<button class="btn btn--gold" data-action="next-day">🌅 Giornata ${st.day + 1} ▶</button>`;
+  }
+}
+
+function renderTabs(st) {
+  $('#tabs').innerHTML = `
+    <button class="tab ${ui.tab === 'day' ? 'tab--active' : ''}" data-action="tab" data-tab="day">📅 Giornata Odierna ${st.phase === 'betting' ? '<span class="tab__dot"></span>' : ''}</button>
+    <button class="tab ${ui.tab === 'skills' ? 'tab--active' : ''}" data-action="tab" data-tab="skills">🌲 Albero Abilità</button>
+    <button class="tab ${ui.tab === 'stats' ? 'tab--active' : ''}" data-action="tab" data-tab="stats">🏆 Classifiche / Statistiche</button>`;
+}
+
+/* =========================== TAB GIORNATA ================================= */
+function pickLabel(st, match, pick) {
+  if (pick === 'X') return 'Pareggio (X)';
+  const ent = st.entities[pick === '1' ? match.home : match.away];
+  return ent.name;
+}
+function eloHtml(st, ent) {
+  const eff = effElo(ent);
+  let out = hasSkill(st, 'insider')
+    ? `<span class="team__elo-num" title="ELO (Bravura)">ELO ${eff}</span>`
+    : `<span class="stars" title="Bravura incerta: ${starsFromElo(eff)} su 5">${starsFromElo(eff)}</span>`;
+  if (hasSkill(st, 'lince')) out += ` <span class="team__form" title="Forma del momento">(${ent.form >= 0 ? '+' : ''}${ent.form.toFixed(1)})</span>`;
+  return out;
+}
+function last5Html(st, ent) {
+  if (!hasSkill(st, 'statistico') || !ent.last5.length) return '';
+  return `<span class="last5" title="Ultimi 5 risultati">${ent.last5.map(x => `<b class="w${x}">${x}</b>`).join('')}</span>`;
+}
+
+function matchCard(st, m, idx) {
+  const sport = SPORT_BY_ID[m.sport];
+  const home = st.entities[m.home], away = st.entities[m.away];
+  const sel = p => st.slip.selections.some(x => x.matchId === m.id && x.pick === p);
+  const canBet = st.phase === 'betting';
+  const oddsBtn = (p, label) => `
+    <button class="odd ${sel(p) ? 'odd--active' : ''}" data-action="toggle-odd" data-match="${m.id}" data-pick="${p}" ${canBet ? '' : 'disabled'}>
+      <span class="odd__label">${label}</span><span class="odd__value">${m.odds[p].toFixed(2)}</span>
+    </button>`;
+  const hasBetOn = st.placedBets.some(b => b.status === 'pending' && b.legs.some(l => l.matchId === m.id));
+  const revealed = m.revealed;
+  const winnerName = revealed && m.result.outcome !== 'X'
+    ? (m.result.outcome === '1' ? home.name : away.name) : null;
+  /* pick dell'utente ancora pendenti su questa partita (max uno per schedina) */
+  const myPicks = st.placedBets.filter(b => b.status === 'pending')
+    .flatMap(b => b.legs.filter(l => l.matchId === m.id).map(l => l.pick));
+  const signal = st.signalMatch === m.id && canBet && hasSkill(st, 'segnale') ? `
+    <div class="match__signal">💡 <b>Pronostico dell'Insider:</b> ${m.result.outcome === 'X' ? 'pareggio!' : 'vince ' + esc(winnerName)}</div>` : '';
+  const tagCls = !hasBetOn ? '' : (myPicks.includes(m.result.outcome) ? 'winner-tag--win' : 'winner-tag--lose');
+  const verdict = !revealed ? '' : !myPicks.length
+    ? `<span class="match__verdict">nessuna giocata</span>`
+    : (myPicks.includes(m.result.outcome)
+      ? `<span class="match__verdict" style="color:var(--accent-dark)">✔ giocata vincente</span>`
+      : `<span class="match__verdict" style="color:var(--danger)">✘ giocata persa</span>`);
+  return `
+  <section class="match ${revealed ? 'revealed' : ''} ${m.id === st.lastReveal ? 'just-revealed' : ''} ${canBet ? '' : 'match--sim'}">
+    <div class="match__head">
+      <span>${sport.icon}</span> ${esc(sport.name)}
+      <span class="match__num">#${idx + 1}</span>
+      <span class="spacer"></span>
+      <span>${sport.kind === 'team' ? 'squadre' : sport.kind === 'duo' ? 'coppie' : 'singolo'}${sport.draw ? ' · X possibile' : ''}</span>
+    </div>
+    <div class="match__teams">
+      <div class="team">
+        <span class="team__name">${esc(home.name)}</span>
+        <span class="team__meta">${eloHtml(st, home)} ${last5Html(st, home)}</span>
+      </div>
+      <span class="vs">VS</span>
+      <div class="team team--away">
+        <span class="team__name">${esc(away.name)}</span>
+        <span class="team__meta">${last5Html(st, away)} ${eloHtml(st, away)}</span>
+      </div>
+    </div>
+    <div class="match__odds">
+      ${oddsBtn('1', '1')}
+      ${sport.draw ? oddsBtn('X', 'X') : ''}
+      ${oddsBtn('2', '2')}
+    </div>
+    ${signal}
+    <div class="match__result ${revealed ? '' : 'hidden'}">
+      <span class="score">${esc(m.result.score)}</span>
+      <span class="winner-tag ${tagCls}">
+        ${winnerName ? '🏅 ' + esc(winnerName) : '🤝 Pareggio'}
+      </span>
+      ${verdict}
+    </div>
+  </section>`;
+}
+
+function slipHtml(st) {
+  const multi = hasSkill(st, 'multiple');
+  const mode = st.slip.mode;
+  const mods = payoutMultiplier(st, 'single');
+  const modsMulti = payoutMultiplier(st, 'multi');
+  const rows = st.slip.selections.map((x, i) => {
+    const m = st.matches.find(mm => mm.id === x.matchId);
+    if (!m) return '';
+    const odds = m.odds[x.pick];
+    return `
+    <div class="slip__row" data-row-odds="${odds}">
+      <div class="slip__pick">
+        <b>${esc(pickLabel(st, m, x.pick))}</b>
+        <span>${esc(SPORT_BY_ID[m.sport].icon + ' ' + homeAwayShort(st, m))}</span>
+      </div>
+      <span class="odd__value" style="color:var(--accent-dark)">@${odds.toFixed(2)}</span>
+      ${mode === 'multi' ? '' : `<input class="stake" type="number" min="5" step="5" data-stake="${i}" value="${x.stake || 10}" title="Puntata su questo evento">`}
+      <button class="x-btn" data-action="remove-sel" data-index="${i}" title="Rimuovi">✕</button>
+    </div>`;
+  }).join('');
+
+  const combined = st.slip.selections.reduce((acc, x) => {
+    const m = st.matches.find(mm => mm.id === x.matchId);
+    return acc * (m ? m.odds[x.pick] : 1);
+  }, 1);
+
+  const totals = mode === 'multi' && multi
+    ? { risk: st.slip.multiStake, win: Math.round(st.slip.multiStake * combined * modsMulti) }
+    : { risk: st.slip.selections.reduce((a, x) => a + (x.stake || 0), 0),
+        win: st.slip.selections.reduce((a, x) => {
+          const m = st.matches.find(mm => mm.id === x.matchId);
+          return a + Math.round((x.stake || 0) * (m ? m.odds[x.pick] : 1) * mods);
+        }, 0) };
+
+  const modeToggle = multi ? `
+    <div class="mode-toggle">
+      <button class="${mode === 'single' ? 'on' : ''}" data-action="set-mode" data-mode="single">🎯 Singole</button>
+      <button class="${mode === 'multi' ? 'on' : ''}" data-action="set-mode" data-mode="multi">🎫 Multipla</button>
+    </div>` : '';
+
+  const multiZone = mode === 'multi' && multi ? `
+    <div class="stake-row">
+      <label>Puntata</label>
+      <input class="stake" type="number" min="5" step="5" data-stake="multi" data-multi-odds="${combined}" value="${st.slip.multiStake}">
+    </div>
+    <div class="slip__totals">
+      <div class="row"><span>Quota combinata</span><b>@${combined.toFixed(2)}</b></div>
+    </div>` : '';
+
+  const modNote = mods > 1 ? `<div class="slip__note">Moltiplicatore vincite attivo: ×${(mode === 'multi' && multi ? modsMulti : mods).toFixed(2)} ${hasSkill(st, 'talento') && mode === 'multi' && multi ? '(incl. Talento dei Multipli)' : ''}</div>` : '';
+
+  const hint = !multi
+    ? `<div class="slip__note">💡 L'abilità <b>Multiple</b> nell'Albero Abilità permette di combinare più eventi in una schedina unica.</div>`
+    : (mode === 'multi' && st.slip.selections.length < 2 ? `<div class="slip__note">Seleziona almeno 2 eventi per la multipla.</div>` : '');
+
+  return `
+  <aside class="slip" id="slip">
+    <div class="slip__head">🎟️ Schedina <span class="slip__count">${st.slip.selections.length} eventi</span></div>
+    ${modeToggle}
+    ${st.slip.selections.length ? rows : `<div class="slip__empty">Nessuna selezione.<br>Clicca una quota per iniziare 👆</div>`}
+    ${multiZone}
+    <div class="slip__totals">
+      <div class="row"><span>Rischio totale</span><b data-total="risk">${money(totals.risk)}</b></div>
+      <div class="row row--big"><span>Potenziale ritorno</span><b data-total="win">${money(totals.win)}</b></div>
+    </div>
+    <button class="btn btn--primary slip__cta" data-action="place" ${st.phase === 'betting' && st.slip.selections.length ? '' : 'disabled'}>
+      ${mode === 'multi' && multi ? 'Piazza multipla' : 'Piazza scommesse'}
+    </button>
+    ${st.slip.selections.length ? `<button class="btn btn--sm slip__cta" data-action="clear-slip" style="margin-top:8px">Svuota schedina</button>` : ''}
+    ${modNote}${hint}
+  </aside>`;
+}
+function homeAwayShort(st, m) {
+  return st.entities[m.home].name + ' – ' + st.entities[m.away].name;
+}
+
+function betRow(st, b) {
+  const total = legsOddsTotal(b.legs);
+  const legs = b.legs.map(l => {
+    const m = st.matches.find(x => x.id === l.matchId);
+    return m ? `${esc(st.entities[m.home].name)} – ${esc(st.entities[m.away].name)} <b>@${l.odds.toFixed(2)}</b> su <b>${esc(pickLabel(st, m, l.pick))}</b>` : '?';
+  }).join('<br>');
+  const statusMap = { pending: '<span class="bet-row__status">in attesa</span>', won: '<span class="bet-row__status bet-row__status--won">VINTA 🏆</span>', lost: '<span class="bet-row__status bet-row__status--lost">persa</span>', cashed: '<span class="bet-row__status bet-row__status--cashed">incassata</span>' };
+  const cashoutBtn = hasSkill(st, 'cashout') && b.status === 'pending' && st.phase === 'betting'
+    ? `<button class="btn btn--sm" data-action="cashout" data-bet="${b.id}">🔙 Cashout ${money(Math.round(b.stake * (1 + 0.45 * (total - 1))))}</button>` : '';
+  return `
+  <div class="bet-row">
+    <div class="bet-row__main">
+      <b>${b.type === 'multi' ? '🎫 Multipla' : '🎯 Singola'} · ${money(b.stake)}</b>
+      <div class="legs-mini">${legs}</div>
+    </div>
+    <div class="bet-row__meta">
+      <span>quota tot @${total.toFixed(2)}</span>
+      ${b.status === 'pending' ? `<span>potenziale <b class="bet-row__payout" style="color:var(--accent-dark)">${money(Math.round(b.stake * total * payoutMultiplier(st, b.type)))}</b></span>` : ''}
+      ${b.status === 'won' ? `<span class="bet-row__payout" style="color:var(--accent-dark)">+${money(b.payout)}</span>` : ''}
+      ${b.status === 'lost' && b.refund ? `<span style="color:var(--gold)">rimborso ${money(b.refund)}</span>` : ''}
+    </div>
+    ${statusMap[b.status] || ''}
+    ${cashoutBtn}
+  </div>`;
+}
+
+function renderDayTab(st) {
+  const matches = st.matches.map((m, i) => matchCard(st, m, i)).join('');
+  const summary = st.phase === 'summary' && st.lastSummary ? `
+    <div class="summary">
+      <div>
+        <h3>Giornata ${st.lastSummary.day} archiviata</h3>
+        <div class="summary__detail">
+          ${st.lastSummary.results.length} scommesse chiuse · puntato ${money(st.lastSummary.wagered)} · incassato ${money(st.lastSummary.returned)}<br>
+          ${st.lastSummary.results.filter(r => r.status === 'won').length} vinte, ${st.lastSummary.results.filter(r => r.status === 'lost').length} perse
+          ${st.lastSummary.results.some(r => r.refund) ? `, rimborsi ${money(st.lastSummary.results.reduce((a, r) => a + r.refund, 0))}` : ''}
+        </div>
+      </div>
+      <div class="net ${st.lastSummary.net >= 0 ? 'net--pos' : 'net--neg'}">${st.lastSummary.net >= 0 ? '+' : '−'}${money(Math.abs(st.lastSummary.net))}</div>
+      <button class="btn btn--gold" data-action="next-day">🌅 Giornata ${st.day + 1} ▶</button>
+    </div>` : '';
+
+  const pending = st.placedBets.length ? `
+    <div class="pending">
+      <div class="section-title">📋 Scommesse della giornata <small>${st.placedBets.filter(b => b.status === 'pending').length} in attesa</small></div>
+      ${st.placedBets.map(b => betRow(st, b)).join('')}
+    </div>` : '';
+
+  return `
+  <div class="grid-day">
+    <div>
+      ${summary}
+      <div class="section-title">🗓️ Partite di oggi <small>${st.matches.length} eventi · ${st.phase === 'betting' ? 'piazza le tue giocate' : 'risultati'}</small></div>
+      <div class="matches">${matches}</div>
+      ${pending}
+    </div>
+    ${st.phase === 'betting' ? slipHtml(st) : ''}
+  </div>`;
+}
+</script>
+<script>
+/* ============================================================================
+   SEZIONE 5 — ALBERO ABILITÀ, CLASSIFICHE/STATISTICHE, OVERLAY, BOOTSTRAP
+   ============================================================================ */
+'use strict';
+
+/* =========================== TAB SKILL TREE =============================== */
+function renderSkillsTab(st) {
+  const visibleIds = Object.keys(SKILLS).filter(id => isNodeVisible(st, id));
+  const prev = ui.prevVisibleSkills;
+  const newIds = prev ? visibleIds.filter(id => !prev.has(id)) : visibleIds;
+  ui.prevVisibleSkills = new Set(visibleIds);
+
+  let popIdx = 0;
+  const nodes = visibleIds.map(id => {
+    const sk = SKILLS[id], owned = hasSkill(st, id);
+    const isNew = newIds.includes(id);
+    const delay = isNew ? (popIdx++ * 110) : null;
+    return `
+    <div class="node ${owned ? 'node--owned' : 'node--available'} ${ui.selectedSkill === id ? 'node--selected' : ''} ${isNew ? 'node--pop' : ''}"
+         style="left:${sk.pos.x}px; top:${sk.pos.y}px; ${delay !== null ? `animation-delay:${delay}ms;` : ''}"
+         data-action="skill-select" data-skill="${id}">
+      <div class="node__icon">${sk.icon}</div>
+      <div class="node__name">${esc(sk.name)}</div>
+      ${owned ? '<div class="node__owned-tag">✓ sbloccata</div>' : `<span class="node__cost">${fmt(sk.cost)}${CREDIT}</span>`}
+    </div>`;
+  }).join('');
+
+  const edges = visibleIds.filter(id => SKILLS[id].parent).map(id => {
+    const sk = SKILLS[id], p = SKILLS[sk.parent];
+    return `<line class="edge ${hasSkill(st, id) ? 'edge--lit' : ''}" x1="${p.pos.x}" y1="${p.pos.y}" x2="${sk.pos.x}" y2="${sk.pos.y}"/>`;
+  }).join('');
+
+  return `
+  <div class="tree-layout">
+    <div class="tree-wrap" id="tree-wrap">
+      <div class="tree">
+        <svg width="1000" height="960" viewBox="0 0 1000 960">${edges}</svg>
+        ${nodes}
+      </div>
+    </div>
+    ${skillInfoHtml(st)}
+  </div>`;
+}
+
+function skillInfoHtml(st) {
+  const id = ui.selectedSkill;
+  const ownedCount = Object.keys(st.skills).length - 1;
+  if (!id || !isNodeVisible(st, id)) {
+    return `
+    <div class="skill-info">
+      <h3><span class="skill-icon">🌲</span> Albero Abilità</h3>
+      <p>Seleziona un nodo per leggerne costi ed effetti. I nodi avvolti nel buio si svelano solo acquistando quelli adiacenti.</p>
+      <p class="meta">Abilità sbloccate: <b>${ownedCount}/15</b> · Crediti: <b>${money(st.credits)}</b></p>
+    </div>`;
+  }
+  const sk = SKILLS[id], owned = hasSkill(st, id);
+  const parentNote = sk.parent ? `Sbloccato da: <b>${esc(SKILLS[sk.parent].name)}</b>` : 'Nodo di partenza';
+  let action = '';
+  if (id === 'root') action = `<div class="locked-note">✅ Nodo di partenza — già attivo</div>`;
+  else if (owned) action = `<div class="locked-note">✅ Acquistata — effetto attivo</div>`;
+  else action = `<button class="btn btn--primary" data-action="skill-buy" data-skill="${id}" ${st.credits >= sk.cost ? '' : 'disabled'}>Acquista · ${money(sk.cost)}</button>`;
+  return `
+  <div class="skill-info">
+    <h3><span class="skill-icon">${sk.icon}</span> ${esc(sk.name)}</h3>
+    <p>${esc(sk.desc)}</p>
+    <p class="meta">${parentNote}${id !== 'root' ? ` · Costo: <b>${money(sk.cost)}</b>` : ''}</p>
+    ${action}
+    ${!owned && id !== 'root' && st.credits < sk.cost ? `<div class="skill-hint">Crediti insufficienti: ti servono ${money(sk.cost)}.</div>` : ''}
+  </div>`;
+}
+
+/* ======================= TAB CLASSIFICHE / STATISTICHE ==================== */
+function renderStatsTab(st) {
+  const L = st.lifetime;
+  const winRate = L.betsPlaced ? Math.round(L.betsWon / L.betsPlaced * 100) : 0;
+  const roi = L.wagered ? Math.round((L.won + L.refunds - L.wagered) / L.wagered * 100) : 0;
+  const card = (k, v, cls = '') => `<div class="stat-card"><div class="k">${k}</div><div class="v ${cls}">${v}</div></div>`;
+
+  const chips = ['all', ...SPORTS.map(s => s.id)].map(sid => {
+    const label = sid === 'all' ? '🏅 Tutti' : SPORT_BY_ID[sid].icon + ' ' + esc(SPORT_BY_ID[sid].name);
+    return `<button class="fchip ${ui.statsSport === sid ? 'on' : ''}" data-action="filter-sport" data-sport="${sid}">${label}</button>`;
+  }).join('');
+
+  const ents = Object.values(st.entities)
+    .filter(e => ui.statsSport === 'all' || e.sport === ui.statsSport)
+    .sort((a, b) => effElo(b) - effElo(a))
+    .slice(0, ui.statsSport === 'all' ? 20 : 14);
+  const rows = ents.map((e, i) => `
+    <tr>
+      <td class="rank rank--${i + 1}">${i + 1}</td>
+      <td><div class="team"><span class="team__name">${esc(e.name)}</span>
+        <span class="team__meta">${hasSkill(st, 'insider') ? `<span class="team__elo-num">ELO ${effElo(e)}</span>` : `<span class="stars">${starsFromElo(effElo(e))}</span>`}</span></div></td>
+      <td>${SPORT_BY_ID[e.sport].icon} ${esc(SPORT_BY_ID[e.sport].name)}</td>
+      <td>${hasSkill(st, 'lince') ? (e.form >= 0 ? '+' : '') + e.form.toFixed(1) : '·'}</td>
+      <td>${hasSkill(st, 'statistico') && e.last5.length ? `<span class="last5">${e.last5.map(x => `<b class="w${x}">${x}</b>`).join('')}</span>` : '·'}</td>
+    </tr>`).join('');
+
+  const histRows = st.history.slice().reverse().slice(0, 12).map(h => `
+    <tr>
+      <td>${h.day}</td><td>${money(h.wagered)}</td><td>${money(h.returned)}</td>
+      <td class="${h.net >= 0 ? 'net-pos' : 'net-neg'}">${h.net >= 0 ? '+' : '−'}${money(Math.abs(h.net))}</td>
+    </tr>`).join('');
+
+  return `
+  <div class="stats-grid">
+    ${card('Giornata', st.day)}
+    ${card('Crediti', money(st.credits), st.credits >= 500 ? 'v--good' : 'v--bad')}
+    ${card('Puntato in carriera', money(L.wagered))}
+    ${card('Vinto in carriera', money(L.won), 'v--good')}
+    ${card('Rimborsi', money(L.refunds))}
+    ${card('Tasso vittoria', winRate + '%', winRate >= 50 ? 'v--good' : 'v--bad')}
+    ${card('ROI carriera', (roi >= 0 ? '+' : '') + roi + '%', roi >= 0 ? 'v--good' : 'v--bad')}
+    ${card('Vincita record', money(L.biggestWin), 'v--good')}
+    ${card('Multiple vinte', L.multisWon)}
+    ${card('Giornate giocate', L.daysSimulated)}
+  </div>
+  <div class="panel">
+    <div class="section-title">🏅 Classifica Bravura <small>per ELO effettivo (base + forma)${hasSkill(st, 'insider') ? '' : ' — Insider svela i numeri esatti'}</small></div>
+    <div class="filter-chips">${chips}</div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>#</th><th>Atleta / Squadra</th><th>Sport</th><th>Forma</th><th>Ultimi 5</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="5" style="text-align:center;color:var(--muted)">Nessun atleta</td></tr>'}</tbody>
+      </table>
+    </div>
+  </div>
+  <div class="panel">
+    <div class="section-title">📖 Diario del botteghino <small>ultime giornate</small></div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Giornata</th><th>Puntato</th><th>Incassato</th><th>Netto</th></tr></thead>
+        <tbody>${histRows || '<tr><td colspan="4" style="text-align:center;color:var(--muted)">Nessuna giornata giocata</td></tr>'}</tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+/* =============================== OVERLAY ================================== */
+function renderOverlay(st) {
+  const ov = $('#overlay');
+  const broke = st.phase === 'betting' && st.credits < 5
+    && !st.placedBets.some(b => b.status === 'pending')
+    && !st.slip.selections.length
+    && !hasSkill(st, 'sponsor1');
+  if (!ui.introDone) {
+    ov.classList.remove('hidden');
+    ov.innerHTML = `
+    <div class="modal">
+      <div class="modal__icon">🎟️</div>
+      <h2>Benvenuto al Botteghino!</h2>
+      <p>Sei il nuovo gestore del botteghino più chiacchierato d'Italia. Partenza con <b>500${CREDIT}</b> e 14 sport (molto) parodiati su cui puntare.</p>
+      <ul>
+        <li>📅 Ogni giornata il sistema sorteggia da <b>5 a 12 partite</b></li>
+        <li>🧠 Le quote nascono dall'<b>ELO</b> degli sfidanti: un divario enorme vale 1.05 contro 8.50</li>
+        <li>🌲 Investi i guadagni nell'<b>Albero Abilità</b>: multiple, insider, sponsor e rimborsi</li>
+        <li>💾 Salvataggio automatico <b>firmato e protetto</b>: chiudi e riprendi quando vuoi</li>
+      </ul>
+      <button class="btn btn--primary" data-action="close-intro">Inizia a scommettere 🎲</button>
+    </div>`;
+  } else if (broke) {
+    ov.classList.remove('hidden');
+    ov.innerHTML = `
+    <div class="modal modal--dark">
+      <div class="modal__icon">💀</div>
+      <h2>Bancarotta!</h2>
+      <p>Giornata ${st.day}: nel cassetto restano ${money(st.credits)}. Senza crediti e senza entrate, il direttore ti revoca la licenza.</p>
+      <p>Consiglio per la prossima carriera: sblocca uno <b>Sponsor</b> nell'albero per un'entrata passiva giornaliera.</p>
+      <button class="btn btn--primary" data-action="new-game">Nuova carriera · 500${CREDIT} 🔁</button>
+    </div>`;
+  } else {
+    ov.classList.add('hidden');
+    ov.innerHTML = '';
+  }
+}
+
+/* ======================= SEQUENZA DI SIMULAZIONE ========================== */
+/* "Simula Giornata": reveal progressivo delle partite, poi chiusura conti. */
+function startSim() {
+  clearTimeout(ui.simTimer);
+  act({ type: 'START_SIM' });
+  const total = BT.getState().matches.length;
+  let done = 0;
+  const step = () => {
+    BT.dispatch({ type: 'REVEAL_NEXT', noSave: true });
+    done++;
+    if (done < total) ui.simTimer = setTimeout(step, 480);
+    else ui.simTimer = setTimeout(finish, 700);
+  };
+  const finish = () => {
+    act({ type: 'SETTLE' });
+    celebrate();
+  };
+  ui.simTimer = setTimeout(step, 420);
+}
+function celebrate() {
+  const sum = BT.getState().lastSummary;
+  if (!sum) return;
+  const wins = sum.results.filter(r => r.status === 'won');
+  wins.slice(0, 3).forEach((r, i) =>
+    setTimeout(() => toast(`🏆 ${r.type === 'multi' ? 'Multipla vincente' : 'Vincita'}: +${money(r.payout)}`, 'gold', 4000), i * 380));
+  if (!wins.length && sum.results.length)
+    setTimeout(() => toast('😭 Nessuna vincita oggi. La forma passa, il banco resta.', 'err'), 400);
+}
+
+/* ============================ RENDER ROOT ================================= */
+let viewKey = null;
+function render() {
+  const st = BT.getState();
+  renderTopbar(st);
+  renderTabs(st);
+  const view = $('#view');
+  view.innerHTML = ui.tab === 'day' ? renderDayTab(st)
+    : ui.tab === 'skills' ? renderSkillsTab(st)
+    : renderStatsTab(st);
+  /* l'animazione d'ingresso scatta solo a cambio tab o di fase (non a ogni click) */
+  const key = ui.tab + ':' + st.phase;
+  if (viewKey !== key) {
+    view.classList.remove('anim');
+    void view.offsetWidth;
+    view.classList.add('anim');
+    viewKey = key;
+  }
+  renderOverlay(st);
+}
+
+/* Aggiorna solo i totali della schedina (per non perdere il focus). */
+function updateSlipTotals() {
+  const st = BT.getState();
+  const slip = $('#slip');
+  if (!slip) return;
+  const multiMode = hasSkill(st, 'multiple') && st.slip.mode === 'multi';
+  let risk = 0, win = 0;
+  if (multiMode) {
+    const v = clamp(Math.floor(Number(document.querySelector('[data-stake="multi"]')?.value) || 0), 0, 1e6);
+    const comb = st.slip.selections.reduce((acc, x) => {
+      const m = st.matches.find(mm => mm.id === x.matchId);
+      return acc * (m ? m.odds[x.pick] : 1);
+    }, 1);
+    risk = v; win = Math.round(v * comb * payoutMultiplier(st, 'multi'));
+  } else {
+    st.slip.selections.forEach((x, i) => {
+      const inp = document.querySelector(`[data-stake="${i}"]`);
+      const v = clamp(Math.floor(Number(inp ? inp.value : x.stake) || 0), 0, 1e6);
+      const m = st.matches.find(mm => mm.id === x.matchId);
+      risk += v; win += Math.round(v * (m ? m.odds[x.pick] : 1) * payoutMultiplier(st, 'single'));
+    });
+  }
+  const rEl = slip.querySelector('[data-total="risk"]'), wEl = slip.querySelector('[data-total="win"]');
+  if (rEl) rEl.textContent = money(risk);
+  if (wEl) wEl.textContent = money(win);
+}
+
+/* ========================= DELEGAZIONE EVENTI ============================= */
+let suppressClick = false, dragState = null;
+document.addEventListener('mousedown', e => {
+  const wrap = e.target.closest('.tree-wrap');
+  if (!wrap) return;
+  dragState = { wrap, x: e.clientX, y: e.clientY, sl: wrap.scrollLeft, st: wrap.scrollTop, moved: false };
+});
+document.addEventListener('mousemove', e => {
+  if (!dragState) return;
+  const dx = e.clientX - dragState.x, dy = e.clientY - dragState.y;
+  if (Math.abs(dx) + Math.abs(dy) > 6) { dragState.moved = true; dragState.wrap.classList.add('dragging'); }
+  dragState.wrap.scrollLeft = dragState.sl - dx;
+  dragState.wrap.scrollTop = dragState.st - dy;
+});
+document.addEventListener('mouseup', () => {
+  if (!dragState) return;
+  if (dragState.moved) suppressClick = true;
+  dragState.wrap.classList.remove('dragging');
+  dragState = null;
+});
+
+document.addEventListener('click', e => {
+  if (suppressClick) {
+    suppressClick = false;
+    if (e.target.closest('.tree-wrap')) return;
+  }
+  const el = e.target.closest('[data-action]');
+  if (!el) return;
+  const a = el.dataset.action;
+  switch (a) {
+    case 'tab': ui.tab = el.dataset.tab; render(); break;
+    case 'toggle-odd': act({ type: 'TOGGLE_SELECTION', matchId: el.dataset.match, pick: el.dataset.pick }); break;
+    case 'remove-sel': act({ type: 'REMOVE_SELECTION', index: +el.dataset.index }); break;
+    case 'set-mode': act({ type: 'SET_MODE', mode: el.dataset.mode }); break;
+    case 'clear-slip': act({ type: 'CLEAR_SLIP' }); break;
+    case 'place': {
+      const inp = document.querySelector('[data-stake="multi"]');
+      act({ type: 'PLACE_BETS', multiStake: inp ? inp.value : 0 });
+      break;
+    }
+    case 'cashout': act({ type: 'CASHOUT', betId: el.dataset.bet }); break;
+    case 'sim': startSim(); break;
+    case 'next-day': act({ type: 'NEXT_DAY' }); break;
+    case 'skill-select': ui.selectedSkill = el.dataset.skill; render(); break;
+    case 'skill-buy': act({ type: 'BUY_SKILL', id: el.dataset.skill }); break;
+    case 'filter-sport': ui.statsSport = el.dataset.sport; render(); break;
+    case 'close-intro':
+      ui.introDone = true;
+      localStorage.setItem('botteghino.intro', '1');
+      render(); break;
+    case 'new-game':
+      clearTimeout(ui.simTimer);
+      act({ type: 'NEW_GAME' });
+      ui.tab = 'day'; ui.selectedSkill = null; ui.prevVisibleSkills = null;
+      break;
+  }
+});
+
+/* Input puntate: aggiornamento mirato senza re-render (mantiene il focus) */
+document.addEventListener('input', e => {
+  const el = e.target.closest('[data-stake]');
+  if (!el) return;
+  const idx = el.dataset.stake;
+  act({ type: 'SET_STAKE', index: idx === 'multi' ? 'multi' : +idx, value: el.value, silent: true, noSave: true });
+  updateSlipTotals();
+});
+document.addEventListener('change', e => {
+  const el = e.target.closest('[data-stake]');
+  if (!el) return;
+  const idx = el.dataset.stake;
+  BT.dispatch({ type: 'SET_STAKE', index: idx === 'multi' ? 'multi' : +idx, value: el.value, silent: true });
+});
+
+/* Feedback anti-cheat: tasto destro e devtools */
+document.addEventListener('contextmenu', () => toast('🔒 Menu contestuale disabilitato: qui si scommette pulito!', 'info', 2200));
+document.addEventListener('keydown', e => {
+  const k = (e.key || '').toUpperCase();
+  if (e.key === 'F12' || (e.ctrlKey && e.shiftKey && (k === 'I' || k === 'J' || k === 'C'))) {
+    toast('🚫 Strumenti sviluppatore bloccati. Onestà prima di tutto!', 'err', 2600);
+  }
+});
+
+/* ================================ INIT ==================================== */
+BT.subscribe(() => render());
+render();
+console.log('%c🎟️ Il Botteghino — pronto. Buona fortuna, direttore.', 'color:#059669;font-weight:bold');
+</script>
+</body>
+</html>
